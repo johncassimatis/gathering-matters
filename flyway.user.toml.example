@@ -1,9 +1,24 @@
 # Copy this file to flyway.user.toml and fill in your own Neon credentials:
 #
-# flyway.user.toml is git ignored and must never be committed. It is where your
-# personal database user and password live. These values merge over the shared
-# settings in flyway.toml, so you only need to add the parts that are yours.
+#     cp flyway.user.toml.example flyway.user.toml
+#
+# flyway.user.toml is git ignored and must never be committed. It holds only
+# your personal login. The shared host and the SET ROLE behaviour are already
+# in flyway.toml, so this file only needs your user and password.
+#
+# Use your own developer login (for example aaron_dev).
 
 [environments.development]
-user = "your_dev_role"
+user = "your_dev_login"
 password = "your_dev_password"
+
+# Personal Neon branch for testing migrations before you merge them.
+# Create a branch off dev in the Neon console, then copy its connection details
+# here. The host differs from shared dev; the login is the same role, copied
+# onto the branch. Uncomment and fill in when you set it up.
+# See the README, "Testing on your personal Neon branch".
+#
+# [environments.personal]
+# url = "jdbc:postgresql://YOUR_BRANCH_HOST.neon.tech/neondb?sslmode=require"
+# user = "your_dev_login"
+# password = "your_dev_password"
