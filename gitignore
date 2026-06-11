@@ -1,0 +1,13 @@
+# Flyway local secrets, never commit
+flyway.user.toml
+
+# Flyway Desktop / Redgate Compare artifacts, not used in this workflow
+schema-model/
+*.scpf
+
+# DataGrip / IntelliJ project files
+.idea/
+*.iml
+
+# OS noise
+.DS_Store

@@ -1,0 +1,9 @@
+# Copy this file to flyway.user.toml and fill in your own Neon credentials:
+#
+# flyway.user.toml is git ignored and must never be committed. It is where your
+# personal database user and password live. These values merge over the shared
+# settings in flyway.toml, so you only need to add the parts that are yours.
+
+[environments.development]
+user = "your_dev_role"
+password = "your_dev_password"

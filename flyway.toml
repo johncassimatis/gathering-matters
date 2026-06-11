@@ -1,0 +1,14 @@
+id = "gathering-matters-database"
+name = "Gathering Matters Database"
+databaseType = "PostgreSQL"
+
+[environments.development]
+url = "jdbc:postgresql://ep-bold-bread-afuwwq8t.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+
+[flyway]
+environment = "development"
+locations = ["filesystem:migrations"]
+cleanDisabled = true
+
+[flyway.add]
+timestamp = "always"
