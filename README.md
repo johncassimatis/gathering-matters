@@ -1,201 +1,236 @@
 # Gathering Matters Database
 
-Schema for the Gathering Matters database, managed with Flyway Community against
-hosted PostgreSQL on Neon. All schema changes are SQL migration files under
-version control. This repository is the source of truth for the database
-structure.
+> This README was drafted with ChatGPT and vetted by the project maintainer. It is project onboarding guidance for this repository, not a replacement for official Flyway or Neon documentation.
 
-Development only for now. Production is added later, when there is something to
-deploy.
+PostgreSQL schema and Flyway migrations for the Gathering Matters database.
 
-## What is in this repository
+This repository is the source of truth for database structure. Structural database changes should be made through SQL migration files in `migrations/`, not manually through a database client.
 
-```
+Current setup:
+
+* Database: Neon PostgreSQL
+* Postgres version: 18
+* Migration tool: Flyway Community Edition 12.8.2-rc2175
+* Workflow: SQL-first migrations reviewed through GitHub
+
+Production is not set up yet. This repository is development-only for now.
+
+## Repository structure
+
+```text
 gathering-matters-database/
-├─ flyway.toml                 committed, shared config, no secrets
-├─ flyway.user.toml.example    committed template for your local secrets
-├─ flyway.user.toml            git ignored, your personal Neon credentials
+├─ flyway.toml                 shared Flyway config, no secrets
+├─ flyway.user.toml.example    template for local credentials
+├─ flyway.user.toml            local credentials, git ignored
 ├─ .gitignore
-├─ README.md                   this file
-└─ migrations/                 every schema change lives here
-   └─ V20260610143000__create_initial_schema.sql
+├─ README.md
+└─ migrations/
+   └─ V001_20260610225550__create_initial_schema.sql
 ```
 
-Migration files live in `migrations/` and nowhere else. Flyway is pointed at
-that folder by the `locations` setting in `flyway.toml`.
+## One-time setup
 
-## One time setup
+### 1. Install Flyway CLI
 
-### 1. Install the Flyway CLI
+Install the Flyway CLI locally.
 
-For a one or two person team, install the CLI locally. It bundles its own Java
-runtime, so there is nothing else to install.
+Check your version:
 
-- macOS: `brew install flyway`
-- Or download the command line tool from the Flyway site and add it to your PATH.
-
-Pin the version so everyone runs the same one. As of this writing that is
-Flyway 12.7.0. Confirm yours with `flyway -v`. When you later add CI, switch to
-the pinned `flyway/flyway` Docker image so local and CI always match. You do not
-need Docker yet.
-
-### 2. Add your credentials
-
-Each developer has their own Neon database role, so credentials are personal and
-never committed.
-
+```bash
+flyway -v
 ```
+
+This repo was started with:
+
+```text
+Flyway Community Edition 12.8.2-rc2175
+```
+
+Use this same version if possible. A compatible Flyway 12.x version should also work for normal development.
+
+### 2. Clone the repo
+
+```bash
+git clone https://github.com/pierce-dfg/gathering-matters-database.git
+cd gathering-matters-database
+```
+
+### 3. Create your local credentials file
+
+Copy the example credentials file:
+
+```bash
 cp flyway.user.toml.example flyway.user.toml
 ```
 
-Open `flyway.user.toml` and fill in your Neon user and password. This file is
-git ignored. The shared host and engine settings are already in `flyway.toml`,
-so your user file only needs the parts that are yours.
+On Windows PowerShell:
 
-Get the connection details from the Neon dashboard. Use the direct (non pooled)
-connection string for Flyway, not the `-pooler` endpoint. Neon requires SSL, so
-the URL in `flyway.toml` already ends with `?sslmode=require`.
-
-### 3. Point the host at your Neon project
-
-In `flyway.toml`, replace `YOUR_DEV_HOST` with your actual Neon development
-endpoint. Start from an empty database so your migration files and the database
-agree from the first run.
-
-## Creating a migration
-
-Do not name files by hand. Use `flyway add`, which generates the timestamped
-file name for you:
-
-```
-flyway add -description="create initial schema"
+```powershell
+Copy-Item flyway.user.toml.example flyway.user.toml
 ```
 
-This creates an empty file in `migrations/` named like
-`V20260610143000__create_initial_schema.sql`. The timestamp is generated
-automatically because `flyway.toml` sets `[flyway.add] timestamp = "always"`.
-Open the new file, write your SQL, and save.
+Then fill in your Neon username and password in `flyway.user.toml`.
 
-Because the version is a timestamp, two people adding migrations on the same day
-never collide on a version number.
+Do not commit `flyway.user.toml`.
+
+### 4. Confirm the database URL
+
+The shared development database URL lives in `flyway.toml`.
+
+Use the Neon direct endpoint, not the `-pooler` endpoint. Flyway migrations need a persistent database session.
+
+The URL format is:
+
+```text
+jdbc:postgresql://<neon-host>/<database>?sslmode=require&channel_binding=require
+```
 
 ## Daily commands
 
-Run these from the repository root. Development is the only environment and the
-default, so a bare command always targets it.
+Run these from the repository root.
 
-```
-flyway info        # what is applied and what is pending, run this first
-flyway validate    # confirm no applied migration has been changed
-flyway migrate     # apply pending migrations
-```
+Check migration status:
 
-`migrate` runs `validate` automatically, but running `info` and `validate`
-yourself first is good habit. `migrate` is safe to run repeatedly; it only
-applies what is pending.
-
-## Verifying a migration in DataGrip
-
-After `flyway migrate` reports success:
-
-1. In DataGrip, refresh the database tree.
-2. Confirm the new tables and columns are present.
-3. Open the `flyway_schema_history` table. Flyway creates and maintains this
-   automatically. Each applied migration has a row with its version,
-   description, checksum, install time, and a `success` flag. This table is the
-   record of what is applied, and it is the same information `flyway info`
-   prints.
-
-Keep using DataGrip for browsing, querying, and drafting SQL. Just do not apply
-schema changes through it directly. Draft the SQL, move it into a migration file
-(via `flyway add`), and let Flyway apply it.
-
-## Migration naming
-
-`flyway add` handles this for you, but for reference the convention is:
-
-```
-V<timestamp>__<description>.sql
+```bash
+flyway info
 ```
 
-Example: `V20260610143000__create_initial_schema.sql`
+Validate migration files:
 
-- `V` marks a versioned migration.
-- The version is a UTC timestamp, `YYYYMMDDHHMMSS`. `flyway add` generates it.
-- Two underscores separate the version from the description.
-- The description comes from the `-description` you pass to `flyway add`.
+```bash
+flyway validate
+```
 
-You do not need a separate migration framework. Flyway plus these plain SQL
-files is the framework.
+Apply pending migrations:
 
-## Do you need baseline?
+```bash
+flyway migrate
+```
 
-No, not while the database is empty. On an empty database, `flyway migrate`
-creates the `flyway_schema_history` table itself and applies your migrations
-from the start. `baseline` exists only for adopting an existing, non empty
-database that Flyway did not create. If your development database already has
-experimental tables from earlier DataGrip work, start clean instead: create a
-fresh empty database and run `migrate` against that.
+`flyway migrate` creates and updates the `flyway_schema_history` table automatically.
 
-## Team workflow rules
+## Repair command
 
-These are the rules that keep the history trustworthy as the team grows.
+`flyway repair` exists, but it is **not** part of the normal workflow.
 
-1. Never edit a migration that has been applied. Flyway stores a checksum of
-   every applied file and refuses to migrate if one changes. If you need to
-   alter something already applied, write a new migration instead.
+Use it only when Flyway's schema history table needs to be repaired, such as after a failed migration attempt or after a maintainer has intentionally resolved a checksum mismatch.
 
-2. Fix forward. Flyway Community has no `undo` command (it is a paid feature), so
-   a mistake is corrected by a new migration that reverses or amends the
-   previous one, not by rolling back.
+```bash
+flyway repair
+```
 
-3. One logical change per migration. A migration should do one coherent thing,
-   for example create one table or add one set of related columns. Small
-   migrations are easier to review and easier to reason about when something
-   goes wrong.
+Important:
 
-4. Review through GitHub pull requests. Create a branch, run `flyway add`, write
-   your SQL, open a PR, get one review, then merge to `main`.
+* Do not use `repair` to casually bypass Flyway errors.
+* Do not use `repair` because you edited an already-applied migration and want Flyway to stop complaining.
+* Do not run `repair` on a shared database unless the team understands why it is needed.
+* `repair` changes Flyway's migration history metadata. It does not fix the actual database schema.
 
-5. Test on your own database, apply the shared one from `main`. Test a new
-   migration against your own Neon branch or a throwaway database first. Only
-   migrations merged to `main` get applied to the shared development database.
-   This keeps half finished work off the database everyone relies on.
+Normal fix for a bad applied migration:
 
-6. Structure changes go through Flyway, content changes go through the tool.
-   When Directus is added later, engineers make structural changes (tables,
-   columns, constraints) as Flyway migrations, and staff make content shaped
-   changes in the Directus interface. Flyway will not police this for you on the
-   free tier, so it is a shared discipline.
+```text
+Create a new migration that corrects the problem.
+```
 
-## What to ignore from Flyway Desktop and paid Redgate features
+Use `repair` only when the migration history table itself is the problem.
 
-This is a command line, migrations only workflow. You can ignore everything tied
-to the Desktop GUI and the comparison engine:
+## Creating a migration
 
-- The `flywayDesktop` and `redgateCompare` sections of the TOML config.
-- The `schema-model/` folder and any `.scpf` filter files, if a tool ever
-  creates them. They are git ignored already.
-- The comparison and deployment commands: `diff`, `generate`, `model`,
-  `prepare`, `deploy`, `snapshot`, `check drift`, and `check dryrun`. These are
-  Teams or Enterprise features.
-- The `undo` command, which is also paid. Fix forward instead.
-- Cloud secret manager resolvers (AWS, GCP, Vault). The git ignored
-  `flyway.user.toml` is enough for now.
+Use `flyway add` to create a new migration file:
 
-## Adding production later
+```bash
+flyway add -description=add_content_items
+```
 
-When you are ready to deploy:
+Then open the generated file in `migrations/`, write the SQL, and save it.
 
-1. Create the production database (a separate Neon project, or a branch).
-2. Add an `[environments.production]` block to `flyway.toml` with its direct URL.
-3. The person who deploys adds a matching `[environments.production]` block with
-   `user` and `password` to their own `flyway.user.toml`. Other developers do
-   not get production credentials.
-4. Deploy from `main` only, targeting it explicitly:
-   `flyway migrate -environment=production`.
+Migration files follow this format:
 
-Other likely next steps, when you need them: a repeatable migration
-(`R__name.sql`) for reference data and views, a Neon branch per developer for
-isolated testing, and the pinned `flyway/flyway` Docker image plus environment
-variable resolvers once you set up CI.
+```text
+V<version>__<description>.sql
+```
+
+Example:
+
+```text
+V002_20260611103000__add_content_items.sql
+```
+
+Rules:
+
+* Use one migration per logical schema change.
+* Do not edit a migration after it has been applied.
+* If something needs to change, create a new migration.
+* Do not create undo migrations. Flyway Community does not support them.
+
+## Verifying a migration
+
+After running:
+
+```bash
+flyway migrate
+```
+
+open the database in your preferred PostgreSQL client and confirm:
+
+* the expected tables and columns exist
+* `flyway_schema_history` has a successful row for the migration
+
+You can use any PostgreSQL client, such as DataGrip, DBeaver, TablePlus, pgAdmin, or `psql`.
+
+Database clients are fine for browsing, querying, and drafting SQL. Do not apply structural schema changes directly through a client unless the same change is captured in a Flyway migration file.
+
+## Team workflow
+
+1. Create a branch.
+2. Create a migration with `flyway add`.
+3. Write the SQL.
+4. Test the migration.
+5. Run:
+
+```bash
+flyway info
+flyway validate
+flyway migrate
+```
+
+6. Open a GitHub pull request.
+7. Get one review.
+8. Merge to `main`.
+
+Only migrations merged to `main` should be applied to the shared development database.
+
+## Important rules
+
+### Keep secrets out of Git
+
+Never commit:
+
+```text
+flyway.user.toml
+.env
+*.env
+```
+
+### Never edit applied migrations
+
+Flyway stores a checksum for each applied migration. If an applied migration file changes, Flyway will detect it and stop.
+
+Fix mistakes with a new migration.
+
+### Fix forward
+
+Flyway Community does not support undo migrations. If a migration needs to be corrected, write a new migration that reverses or amends the previous one.
+
+### Keep structure SQL-first
+
+Engineers change database structure through Flyway migrations:
+
+* tables
+* columns
+* constraints
+* indexes
+* foreign keys
+* database functions/triggers
+
+When Directus is added later, it can manage content and editor/admin configuration, but structural schema changes should still go through Flyway.
