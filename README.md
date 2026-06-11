@@ -9,6 +9,7 @@ This repository is the source of truth for database structure. Structural databa
 Current setup:
 
 * Database: Neon PostgreSQL
+* Development database: `neondb`
 * Postgres version: 18
 * Migration tool: Flyway Community Edition 12.8.2-rc2175
 * Workflow: SQL-first migrations reviewed through GitHub
@@ -24,9 +25,15 @@ gathering-matters-database/
 ├─ flyway.user.toml            local credentials, git ignored
 ├─ .gitignore
 ├─ README.md
+├─ provisioning/               one-time manual role setup, not Flyway migrations
+│  └─ 01_dev_roles.sql
 └─ migrations/
    └─ V001_20260610225550__create_initial_schema.sql
 ```
+
+Migration files live in `migrations/`.
+
+Role and access setup scripts live in `provisioning/`. These are manual administrative scripts and are not run by Flyway.
 
 ## One-time setup
 
@@ -69,9 +76,29 @@ On Windows PowerShell:
 Copy-Item flyway.user.toml.example flyway.user.toml
 ```
 
-Then fill in your Neon username and password in `flyway.user.toml`.
+Then fill in your Neon/Postgres username and password in `flyway.user.toml`.
+
+Each developer uses their own limited login role.
+
+Example for Pierce:
+
+```toml
+[environments.development]
+user = "pierce_dev"
+password = "your-password"
+```
+
+Example for Aaron:
+
+```toml
+[environments.development]
+user = "aaron_dev"
+password = "your-password"
+```
 
 Do not commit `flyway.user.toml`.
+
+Do not use `neondb_owner` for normal Flyway work. `neondb_owner` is only for one-time administrative setup, such as creating roles or changing role passwords.
 
 ### 4. Confirm the database URL
 
@@ -82,8 +109,49 @@ Use the Neon direct endpoint, not the `-pooler` endpoint. Flyway migrations need
 The URL format is:
 
 ```text
-jdbc:postgresql://<neon-host>/<database>?sslmode=require&channel_binding=require
+jdbc:postgresql://<neon-host>/neondb?sslmode=require
 ```
+
+The shared URL belongs in `flyway.toml`. Personal usernames and passwords belong only in `flyway.user.toml`.
+
+## Database roles
+
+The development database uses separate login roles and a shared migration role.
+
+Each developer logs in with their own role, such as:
+
+```text
+pierce_dev
+aaron_dev
+```
+
+Flyway then runs:
+
+```sql
+SET ROLE gm_migrator;
+```
+
+through the shared `flyway.toml` config.
+
+This means migrations are executed as `gm_migrator`, so schema objects are owned consistently by one shared migration role instead of by whichever developer happened to run the migration.
+
+The normal access model is:
+
+```text
+developer login role -> SET ROLE gm_migrator -> run migrations
+```
+
+`gm_migrator` is a `NOLOGIN` role, so nobody connects directly as it.
+
+The role setup is documented in:
+
+```text
+provisioning/01_dev_roles.sql
+```
+
+This file is not a Flyway migration. It is a one-time manual setup script run by the project owner as `neondb_owner`.
+
+Do not put role creation, login creation, or real passwords in `migrations/`.
 
 ## Daily commands
 
@@ -108,6 +176,15 @@ flyway migrate
 ```
 
 `flyway migrate` creates and updates the `flyway_schema_history` table automatically.
+
+For normal onboarding, new developers should start with:
+
+```bash
+flyway info
+flyway validate
+```
+
+Do not run `flyway migrate` against the shared development database until the team is ready to apply the pending migrations.
 
 ## Repair command
 
@@ -175,6 +252,15 @@ open the database in your preferred PostgreSQL client and confirm:
 
 * the expected tables and columns exist
 * `flyway_schema_history` has a successful row for the migration
+* new schema objects are owned by `gm_migrator`
+
+You can check table ownership with:
+
+```sql
+SELECT tablename, tableowner
+FROM pg_tables
+WHERE schemaname = 'public';
+```
 
 You can use any PostgreSQL client, such as DataGrip, DBeaver, TablePlus, pgAdmin, or `psql`.
 
@@ -208,9 +294,12 @@ Never commit:
 
 ```text
 flyway.user.toml
+flyway.user.toml.superuser
 .env
 *.env
 ```
+
+Real database passwords should be shared through a password manager or another secure channel, never through Git.
 
 ### Never edit applied migrations
 
@@ -221,6 +310,12 @@ Fix mistakes with a new migration.
 ### Fix forward
 
 Flyway Community does not support undo migrations. If a migration needs to be corrected, write a new migration that reverses or amends the previous one.
+
+### Keep role setup out of migrations
+
+Do not create login roles, passwords, or administrative grants in Flyway migration files.
+
+Role setup belongs in `provisioning/` as a manual admin script.
 
 ### Keep structure SQL-first
 
@@ -234,3 +329,30 @@ Engineers change database structure through Flyway migrations:
 * database functions/triggers
 
 When Directus is added later, it can manage content and editor/admin configuration, but structural schema changes should still go through Flyway.
+
+## Notes on Flyway configuration
+
+The shared `flyway.toml` config sets the development environment and points Flyway at the `migrations/` folder.
+
+It also sets:
+
+```toml
+initSql = "SET ROLE gm_migrator"
+```
+
+This makes Flyway run migrations as the shared `gm_migrator` role after connecting with each developer's personal login role.
+
+`initSql` is currently used for simplicity. If Flyway removes it in a future version, this can move to an `afterConnect.sql` callback in a scanned location.
+
+## Production
+
+Production is not configured yet.
+
+When production exists, it should use:
+
+* a separate Neon database/project/branch
+* separate production credentials
+* a separate `[environments.production]` block in `flyway.toml`
+* explicit production deploy commands from `main`
+
+Do not give normal developers production credentials by default.
