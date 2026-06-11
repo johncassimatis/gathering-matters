@@ -1,5 +1,5 @@
 # Flyway local secrets, never commit
-flyway.user.toml
+flyway.user.toml.superuser
 
 # Flyway Desktop / Redgate Compare artifacts, not used in this workflow
 schema-model/
@@ -11,3 +11,5 @@ schema-model/
 
 # OS noise
 .DS_Store
+/flyway.user.toml.superuser
+/flyway.user.toml
