@@ -1,42 +1,82 @@
-# Gathering Matters Database
+# Gathering Matters
 
-> This README was drafted with ChatGPT and vetted by the project maintainer. It is project onboarding guidance for this repository, not a replacement for official Flyway or Neon documentation.
+> This README is project onboarding guidance for this repository, not a replacement for official Flyway, Neon, or Directus documentation.
 
-PostgreSQL schema and Flyway migrations for the Gathering Matters database.
+This is a monorepo with two subprojects:
 
-This repository is the source of truth for database structure. Structural database changes should be made through SQL migration files in `migrations/`, not manually through a database client.
+* **`gathering-matters-db/`** — PostgreSQL schema and Flyway migrations. Source of truth for
+  database *structure*. Structural changes go through SQL migrations in
+  `gathering-matters-db/migrations/`, never manually through a client.
+* **`gathering-matters-directus/`** — the Directus 12 runtime: Docker Compose, the three custom
+  extensions (`gm-library`, `gm-intake`, `promote-submission`), and bootstrap. Source of truth for
+  the CMS/runtime and its configuration.
+
+The two are coupled by one ordering rule: some migrations depend on Directus system tables, so the
+database and Directus have to be brought up in a specific interleaved order. That sequence is in
+**Migration ordering and the Directus bootstrap boundary** below, and it is the first thing to read
+before setting up a fresh branch.
+
+Working directory matters: Flyway commands run from `gathering-matters-db/` (where `flyway.toml`
+lives); `docker compose` commands run from `gathering-matters-directus/` (where
+`docker-compose.yml` lives). Each command block below is labelled with the directory it runs in.
 
 Current setup:
 
-* Database: Neon PostgreSQL
-* Development database: `neondb`
-* Postgres version: 18
+* Database: Neon PostgreSQL, database `neondb`, Postgres 18 (`uuidv7()` primary keys)
 * Migration tool: Flyway Community Edition 12.8.2-rc2175
-* Workflow: SQL-first migrations reviewed through GitHub
-* Testing workflow: personal Neon branches before shared development
+* CMS/runtime: Directus 12.0.2 (bootstrapped and running on `pierce_dev`)
+* Workflow: SQL-first migrations reviewed through GitHub; personal Neon branches before shared development
 
-Production is not set up yet. This repository is development-only for now.
+Production is not set up yet. This repository is development-only for now. A durable, licensed
+staging Directus instance is planned but not yet built; the Directus license is intentionally not
+applied to any local/personal instance (it binds to `PUBLIC_URL` on first use).
+
+> Bootstrap-boundary reminder: migrations V004 and later reference Directus system tables
+> (`directus_users`, `directus_files`) and cannot be applied to a branch until Directus has
+> bootstrapped that branch. See the boundary section before migrating a fresh branch.
 
 ## Repository structure
 
 ```text
-gathering-matters-database/
-├─ flyway.toml                 shared Flyway config, no secrets
-├─ flyway.user.toml.example    template for local credentials
-├─ flyway.user.toml            local credentials, git ignored
+gathering-matters/                          monorepo root
 ├─ .gitignore
-├─ README.md
-├─ provisioning/               one-time manual role setup, not Flyway migrations
-│  └─ 01_dev_roles.sql
-└─ migrations/
-   └─ V...__create_initial_schema.sql
+├─ README.md                                (this file)
+├─ gathering-matters-db/
+│  ├─ flyway.toml                           shared Flyway config, no secrets
+│  ├─ flyway.user.toml.example              template for local credentials
+│  ├─ flyway.user.toml                      local credentials, git ignored
+│  ├─ provisioning/                         one-time manual admin scripts, NOT Flyway migrations
+│  │  ├─ 01_dev_roles.sql                   gm_migrator + developer login roles
+│  │  ├─ 02_directus_role_setup.sql         gm_directus service role + bootstrap grants
+│  │  └─ 03_directus_post_bootstrap_grants.sql  REFERENCES + scoped gm_directus app grants
+│  ├─ tests/
+│  │  └─ verification.sql                   schema-invariant checks (reporting-oriented)
+│  └─ migrations/
+│     ├─ V001_20260610225550__create_initial_schema.sql
+│     ├─ V002_20260623141610__add_content_submissions_and_types.sql
+│     ├─ V003_20260623141647__keyset_indexes_placement_risk_event.sql
+│     ├─ V004_20260629194749__directus_relations_privacy_audit_files.sql   (post-bootstrap)
+│     └─ V005_20260629195805__audit_event_immutable.sql                    (post-bootstrap)
+└─ gathering-matters-directus/
+   ├─ .env.example                          template for Directus runtime env, git ignored as .env
+   ├─ docker-compose.yml
+   └─ extensions-src/                        editable extension source (built artifacts are git ignored)
+      ├─ gm-intake/        (src/index.js, package.json, package-lock.json)
+      ├─ gm-library/       (src/index.js, package.json, package-lock.json)
+      └─ promote-submission/ (src/api.js, src/app.js, package.json, package-lock.json)
 ```
 
-Migration files live in `migrations/`.
+Migration files live in `gathering-matters-db/migrations/`. Versions use an ordinal plus timestamp
+(`V00N_<timestamp>`) so they both sort deterministically and stay human-readable. V001–V003 are
+pre-bootstrap; V004–V005 depend on Directus system tables (see the bootstrap-boundary section).
 
-Role and access setup scripts live in `provisioning/`. These are manual administrative scripts and are not run by Flyway.
+Role/access setup lives in `gathering-matters-db/provisioning/` as manual admin scripts run by the
+project owner as `neondb_owner`. They are not Flyway migrations.
 
-## One-time setup
+## One-time setup (database / Flyway)
+
+This section sets up Flyway against the database. Directus setup is a separate section further
+down (Getting Directus running).
 
 ### 1. Install Flyway CLI
 
@@ -59,8 +99,14 @@ Use this same version if possible. A compatible Flyway 12.x version should also 
 ### 2. Clone the repo
 
 ```bash
-git clone https://github.com/pierce-dfg/gathering-matters-database.git
-cd gathering-matters-database
+git clone <monorepo-url>        # confirm the actual monorepo URL; the DB is no longer its own repo
+cd gathering-matters
+```
+
+Flyway work happens in the database subproject:
+
+```bash
+cd gathering-matters-db
 ```
 
 ### 3. Create your local credentials file
@@ -146,13 +192,46 @@ developer login role -> SET ROLE gm_migrator -> run migrations
 
 `gm_migrator` is a `NOLOGIN` role, so nobody connects directly as it.
 
-The role setup is documented in:
+### The Directus runtime role (`gm_directus`)
 
-```text
-provisioning/01_dev_roles.sql
+Once Directus is bootstrapped against a branch, a second service role exists: `gm_directus`.
+This is a `LOGIN` role that the Directus container connects as. It is deliberately **not** part
+of the developer migration flow:
+
+* It **owns the `directus_*` system tables** it creates during bootstrap. This is the one place
+  ownership is intentionally split: `gm_migrator` owns the application schema, `gm_directus` owns
+  the Directus system schema.
+* It holds only least-privilege grants on the application tables the custom endpoints actually
+  query, not ownership and not DDL. It never runs Flyway migrations.
+* Its credentials live only in the Directus repo's runtime environment (`.env`), never in `flyway.user.toml`.
+
+`gm_directus` and its bootstrap-time grants are created by
+`provisioning/02_directus_role_setup.sql`, run once per branch **before** Directus bootstraps
+(Directus connects as `gm_directus`, so the role must exist first).
+
+Because ownership is split, a second manual step is required **after** bootstrap: `gm_migrator`
+must be able to add foreign keys pointing at the `gm_directus`-owned Directus tables, and
+`gm_directus` needs its scoped read/write grants on the application tables the endpoints query.
+Both are in `provisioning/03_directus_post_bootstrap_grants.sql`, which includes:
+
+```sql
+-- run as neondb_owner AFTER Directus bootstrap, BEFORE V004
+GRANT REFERENCES ON directus_users, directus_files TO gm_migrator;
+-- plus the least-privilege application-table grants for gm_directus
 ```
 
-This file is not a Flyway migration. It is a one-time manual setup script run by the project owner as `neondb_owner`.
+Do not put `gm_directus`, its grants, or the `REFERENCES` grant inside `migrations/`; they are
+manual provisioning steps, the same as the developer roles.
+
+Role setup is documented across the provisioning scripts:
+
+```text
+provisioning/01_dev_roles.sql                    gm_migrator + developer login roles
+provisioning/02_directus_role_setup.sql          gm_directus + bootstrap grants (run before bootstrap)
+provisioning/03_directus_post_bootstrap_grants.sql  REFERENCES + gm_directus app grants (run after bootstrap)
+```
+
+These are not Flyway migrations. They are one-time manual setup scripts run by the project owner as `neondb_owner`.
 
 Do not put role creation, login creation, or real passwords in `migrations/`.
 
@@ -258,9 +337,161 @@ Typical reset workflow:
 5. Add and test your migration on your personal branch.
 ```
 
+## Migration ordering and the Directus bootstrap boundary
+
+This is the one place the "reset branch, then migrate" workflow is not a straight line, and it
+will fail confusingly if you skip it.
+
+The migration set is split across a Directus bootstrap boundary:
+
+```text
+V001 – V003   pre-bootstrap    plain application schema, no Directus dependency
+--- Directus bootstrap happens here ---
+V004 – V005   post-bootstrap   reference directus_users / directus_files
+```
+
+V004 begins with a guard that raises a clear error if the Directus system tables are missing, so a
+straight `flyway migrate` on a branch that has not bootstrapped Directus will stop at V004 with a
+message telling you to bootstrap first. That is expected, not a bug.
+
+To bring a **fresh** branch (for example after resetting your personal branch) to the full current
+schema, the order interleaves the two subprojects. Directory in brackets:
+
+```text
+1. [db]       flyway migrate -environment=personal -target=003_20260623141647   (through last pre-bootstrap)
+2. [db]       run provisioning/02_directus_role_setup.sql as neondb_owner        (creates gm_directus; role must exist before bootstrap)
+3. [directus] docker compose run --rm directus bootstrap && docker compose up -d (creates directus_* system tables)
+4. [db]       run provisioning/03_directus_post_bootstrap_grants.sql as neondb_owner (REFERENCES + gm_directus app grants)
+5. [db]       flyway migrate -environment=personal                                (applies V004 and V005)
+```
+
+If you are only testing a **new** pre-bootstrap migration and your branch already has Directus
+bootstrapped (or you are not touching V004+), a plain `flyway migrate -environment=personal` is
+fine. The boundary only matters when a branch has the post-bootstrap migrations pending but no
+Directus system tables yet.
+
+Note on shared `development`: confirm whether `development` has itself been bootstrapped and taken
+V004/V005 before assuming a reset personal branch will migrate cleanly. A personal branch inherits
+whatever state `development` is in at reset time.
+
+## Getting Directus running (`gathering-matters-directus/`)
+
+This is the runtime side of the fresh-branch sequence above. It assumes the branch already has
+V001–V003 applied and `gm_directus` created (steps 1–2).
+
+Prerequisites: Docker Desktop, and Node.js (to build the extensions).
+
+### 1. Configure the runtime environment
+
+```text
+DIRECTORY: gathering-matters-directus
+```
+
+```bash
+cp .env.example .env        # (PowerShell: Copy-Item .env.example .env)
+```
+
+Fill in `.env`. The decisions that matter, beyond the values `.env.example` lists:
+
+* `DB_USER=gm_directus` and the **direct** Neon endpoint (not `-pooler`), `DB_SSL=true`. Directus
+  holds session state that Neon's transaction-mode pooler can break, and bootstrap is DDL.
+* Generate `KEY` and `SECRET` (two independent random values). PowerShell:
+  `[Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))` run twice.
+* Set `ADMIN_EMAIL` / `ADMIN_PASSWORD` so bootstrap creates the first admin non-interactively.
+* Leave `LICENSE_KEY` **empty** on local/personal branches. The OIG license binds to `PUBLIC_URL`
+  on first use, so it is reserved for the durable staging instance, not a resettable branch.
+* Extension secrets (`GM_SEARCH_CURSOR_SECRET`, `GM_RISK_HASH_SECRET`, `GM_SUBMISSION_CONSENT_VERSION`,
+  `GM_CONTACT_CONSENT_VERSION`) can stay unset for a first bootstrap; set them before exercising the
+  endpoints. Leave `GM_PROMOTION_ROLE_IDS` unset until the role matrix exists on staging; the
+  promotion operation safely refuses without it.
+
+Never commit `.env`.
+
+### 2. Bootstrap Directus
+
+```text
+DIRECTORY: gathering-matters-directus
+```
+
+```bash
+docker compose run --rm directus bootstrap
+docker compose up -d
+docker compose logs -f directus
+```
+
+`bootstrap` creates the `directus_*` system tables (owned by `gm_directus`) and the first admin.
+The Studio is then at `http://localhost:8055`. The repeated `Could not set primary key ... unknown
+table` lines for the application tables are expected and harmless: Directus is declining to manage
+tables it hasn't been told are collections.
+
+After bootstrap, return to step 4 of the boundary sequence (run
+`03_directus_post_bootstrap_grants.sql`), then step 5 (`flyway migrate` for V004/V005).
+
+### 3. Build and mount the extensions
+
+The three extensions live in `extensions-src/`. Build each, then stage `package.json` + `dist/`
+into the Docker-mounted extensions directory as a folder named `directus-extension-<name>` (Directus
+only loads folders with that prefix). Built artifacts are git ignored and regenerated; the committed
+`package-lock.json` files pin the toolchain for reproducible installs (`npm ci` uses them).
+
+```text
+DIRECTORY: gathering-matters-directus/extensions-src/<name>
+```
+
+```bash
+npm ci            # or: npm install (uses the committed package-lock.json)
+npm run build     # produces dist/
+```
+
+**Required for `gm-intake` and `promote-submission`:** both import from `@directus/errors`. Directus
+provides that package at runtime, but the bundler must resolve it at build time, so it has to be an
+exact-version dev dependency. In each of those two folders:
+
+```bash
+npm install --save-dev --save-exact @directus/errors
+```
+
+`gm-library` does not import `@directus/errors` and does not need this. The `package-lock.json` files
+capture the dependency, so a clean `npm ci` restores it; the explicit install is only needed when
+setting a folder up from scratch.
+
+Stage the built output into the mounted directory (PowerShell example for one extension):
+
+```powershell
+New-Item -ItemType Directory -Force -Path ..\..\extensions\directus-extension-gm-library | Out-Null
+Copy-Item package.json ..\..\extensions\directus-extension-gm-library\ -Force
+Copy-Item dist          ..\..\extensions\directus-extension-gm-library\ -Recurse -Force
+```
+
+Repeat for `gm-intake` and `promote-submission`. Confirm `docker-compose.yml` mounts `./extensions`
+to `/directus/extensions`, and set `EXTENSIONS_MUST_LOAD=true` in `.env` so a failed extension makes
+Directus exit loudly instead of starting half-broken.
+
+### 4. Restart and verify the load
+
+```text
+DIRECTORY: gathering-matters-directus
+```
+
+```bash
+docker compose up -d --force-recreate
+docker compose logs -f directus
+```
+
+The container staying up (with `EXTENSIONS_MUST_LOAD=true`) means all three loaded. Then probe:
+
+```powershell
+curl.exe -i http://localhost:8055/gm-library/search
+```
+
+* `500 {"error":"search_unavailable"}` means the route loaded and hit its cursor-secret guard
+  (expected when `GM_SEARCH_CURSOR_SECRET` is unset).
+* `200` with an empty feed means the route loaded and the secret is set.
+* `404` means the extension did not load. Check the logs for the named failure.
+
 ## Daily commands
 
-Run these from the repository root.
+Run these from `gathering-matters-db/`.
 
 Check migration status on shared development:
 
@@ -346,11 +577,14 @@ Migration files follow this format:
 V<version>__<description>.sql
 ```
 
-Example:
+This repo uses an ordinal-plus-timestamp version so files sort deterministically and read clearly:
 
 ```text
-V20260611103000__add_content_items.sql
+V004_20260629194749__directus_relations_privacy_audit_files.sql
 ```
+
+`flyway add` generates a bare-timestamp version; keep the repo's ordinal prefix convention when you
+name the file (the next migration would be `V006_<timestamp>__...`).
 
 Rules:
 
@@ -530,6 +764,13 @@ Engineers change database structure through Flyway migrations:
 * database functions/triggers
 
 When Directus is added later, it can manage content and editor/admin configuration, but structural schema changes should still go through Flyway.
+
+Directus is now bootstrapped (see the setup notes above), so this boundary is live, not
+hypothetical: Directus owns its own system tables and, later, content and editor/admin
+configuration, but it must never be used to alter the application schema. Every table, column,
+constraint, index, foreign key, function, and trigger in the application schema stays Flyway-owned
+and SQL-first. If a change shows up in Directus's data-model tools that isn't captured in a
+migration, that is drift to correct, not a shortcut to take.
 
 ## Notes on Flyway configuration
 
