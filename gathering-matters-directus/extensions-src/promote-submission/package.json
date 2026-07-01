@@ -1,0 +1,30 @@
+{
+  "name": "directus-extension-promote-submission",
+  "version": "1.0.0",
+  "type": "module",
+  "keywords": [
+    "directus",
+    "directus-extension",
+    "directus-extension-operation"
+  ],
+  "directus:extension": {
+    "type": "operation",
+    "path": {
+      "app": "dist/app.js",
+      "api": "dist/api.js"
+    },
+    "source": {
+      "app": "src/app.js",
+      "api": "src/api.js"
+    },
+    "host": "^12.0.0"
+  },
+  "scripts": {
+    "build": "directus-extension build",
+    "dev": "directus-extension build -w --no-minify"
+  },
+  "devDependencies": {
+    "@directus/errors": "2.4.0",
+    "@directus/extensions-sdk": "12.0.2"
+  }
+}

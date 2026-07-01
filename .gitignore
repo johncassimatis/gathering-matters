@@ -1,15 +1,20 @@
-# Flyway local secrets, never commit
-flyway.user.toml.superuser
+.env
+.env.*
+!.env.example
+flyway.user.toml
+/gathering-matters-db/flyway.user.toml.superuser
+/gathering-matters-db/directus.login
 
-# Flyway Desktop / Redgate Compare artifacts, not used in this workflow
-schema-model/
-*.scpf
+/gathering-matters-db/docs/
 
-# DataGrip / IntelliJ project files
 .idea/
-*.iml
+.neon
 
-# OS noise
+node_modules/
+gathering-matters-directus/extensions-src/*/dist/
+gathering-matters-directus/extensions/
+
+gathering-matters-directus/uploads/
+
 .DS_Store
-/flyway.user.toml.superuser
-/flyway.user.toml
+Thumbs.db
