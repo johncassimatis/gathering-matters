@@ -1,18 +1,11 @@
 // extensions/endpoints/gm-intake/index.js
-// Public submission intake: POST /gm-intake/submissions
-// The public Directus role must NOT have raw create on `submission`. This endpoint owns all
-// server-set fields and never trusts the client for status, consent metadata, or workflow fields.
+// Public intake endpoint: POST /gm-intake/submissions.
+// The public Directus role must not have direct create access to `submission`;
+// this endpoint owns workflow and consent fields server-side.
 //
-// Reconciliation: writes the FROZEN V2 consent columns (consent, consent_at,
-// consent_notice_version) AND the contact-consent columns added in V20260623150000
-// (contact_consent, contact_consent_at, contact_consent_notice_version). consent is forced
-// true (V2 gate). Both consent records are written all-or-nothing.
-//
-// TRUST CAVEAT: the per-IP check below is BEST-EFFORT telemetry only. X-Forwarded-For is
-// client-supplied and spoofable unless Directus sits behind a controlled proxy that strips
-// inbound XFF and sets its own trusted value. The ENFORCED public abuse limit must live at the
-// edge (Cloudflare / reverse proxy) plus the Directus built-in rate limiter. Do not rely on
-// this DB check as the security boundary.
+// IP-based checks here are best-effort telemetry only. Enforce public abuse
+// limits at the edge and through Directus rate limiting.
+
 import crypto from 'node:crypto';
 import { createError } from '@directus/errors';
 
@@ -26,10 +19,9 @@ const WINDOW_MINUTES = 60, MAX_PER_WINDOW = 5, DUP_WINDOW_HOURS = 24;
 const SOURCES = new Set(['listening_program', 'young_adult_initiative']);
 const AGE_RANGES = new Set(['under_18','18_24','25_34','35_44','45_54','55_64','65_plus','prefer_not_to_say']);
 
-// title: collapse all runs of whitespace to a single space.
 const normalizeTitle = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
-// body: normalize line endings, cap consecutive blank lines, trim trailing spaces per line and
-// outer whitespace, but PRESERVE paragraph breaks and intended structure.
+
+// Preserve paragraph breaks while normalizing line endings and excess whitespace.
 function normalizeBody(v) {
   return String(v ?? '')
     .replace(/\r\n?/g, '\n')
@@ -37,12 +29,13 @@ function normalizeBody(v) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
+
 const normalizeInline = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
 const isValidEmail = (v) => !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 const hmacHex = (secret, input) => crypto.createHmac('sha256', secret).update(input).digest('hex');
 
 function getRequestIp(req) {
-  // BEST-EFFORT only. See trust caveat at top of file.
+  // Only trustworthy when a controlled proxy overwrites X-Forwarded-For.
   const fwd = req.headers['x-forwarded-for'];
   if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0].trim();
   return req.ip || req.socket?.remoteAddress || '';
@@ -121,7 +114,7 @@ export default {
           return res.status(202).json({ data: { status: 'accepted' } });
         }
 
-        // Persist contact consent only when granted; otherwise leave the all-or-nothing record null.
+        // Record contact-consent metadata only when the submitter opted in.
         const contactConsentFields = (hasContactInfo && consentToContact)
           ? { contact_consent: true, contact_consent_at: db.fn.now(), contact_consent_notice_version: contactNoticeVersion }
           : { contact_consent: false, contact_consent_at: null, contact_consent_notice_version: null };
@@ -143,20 +136,29 @@ export default {
               date_updated: trx.fn.now(),
             })
             .returning(['id']);
+
           await trx('risk_event').insert({
             submission_id: inserted.id, event_type: 'submission_received',
             ip_hash: ipHash, user_agent: userAgent, request_fingerprint: fingerprint,
             details: JSON.stringify({ source }), created_at: trx.fn.now(),
           });
+
           return inserted.id;
         });
 
         return res.status(201).json({
-          data: { id: submissionId, status: 'pending', message: 'Thanks. Your submission has been received for review.' },
+          data: {
+            id: submissionId,
+            status: 'pending',
+            message: 'Thanks. Your submission has been received for review.',
+          },
         });
       } catch (error) {
         const code = error.extensions?.code;
-        if (code === 'INVALID_REQUEST' || code === 'VALIDATION_FAILED' || code === 'RATE_LIMITED') return next(error);
+        if (code === 'INVALID_REQUEST' || code === 'VALIDATION_FAILED' || code === 'RATE_LIMITED') {
+          return next(error);
+        }
+
         logger.error(error, 'gm-intake/submissions failed');
         return next(new SubmissionError());
       }

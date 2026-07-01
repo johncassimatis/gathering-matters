@@ -1,4 +1,4 @@
-// Flow-panel UI for the promote-submission operation.
+// Directus Flow panel metadata for the promote-submission operation.
 export default {
   id: 'promote-submission',
   name: 'Promote Submission to Content',
