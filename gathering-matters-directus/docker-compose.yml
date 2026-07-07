@@ -1,9 +1,13 @@
 services:
   directus:
-    image: directus/directus:12.0.2
+    # Baked-extension image: extensions are compiled from extensions-src and
+    # copied into /directus/extensions by the Dockerfile. No extensions bind
+    # mount here, so the baked artifacts are what actually run.
+    build:
+      context: .
+    image: gathering-matters-directus:local
     ports:
       - "8055:8055"
     env_file: .env
     volumes:
       - ./uploads:/directus/uploads
-      - ./extensions:/directus/extensions

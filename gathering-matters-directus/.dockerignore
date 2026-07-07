@@ -1,0 +1,18 @@
+# Keep the build context small, reproducible, and secret-free.
+# The image builds every extension from source with `npm ci` + build inside the
+# build stage, so local install/build artifacts must never enter the context.
+**/node_modules
+**/dist
+
+# Generated staging dir; the baked image copies from extensions-src only.
+extensions/
+
+# Local runtime data and secrets.
+uploads/
+.env
+.env.*
+.neon
+
+# Not needed inside the build context.
+docker-compose*.yml
+.git
