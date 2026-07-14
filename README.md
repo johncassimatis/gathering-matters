@@ -24,12 +24,13 @@ Current setup:
 
 * Database: Neon PostgreSQL, database `neondb`, Postgres 18 (`uuidv7()` primary keys)
 * Migration tool: Flyway Community Edition 12.8.2-rc2175
-* CMS/runtime: Directus 12.0.2 (bootstrapped and running on `pierce_dev`)
-* Workflow: SQL-first migrations reviewed through GitHub; personal Neon branches before shared development
+* CMS/runtime: Directus 12.0.2 (production branch bootstrapped through V005)
+* Workflow: SQL-first migrations reviewed through GitHub; personal Neon branches before explicit production promotion
 
-Production is not set up yet. This repository is development-only for now. A durable, licensed
-staging Directus instance is planned but not yet built; the Directus license is intentionally not
-applied to any local/personal instance (it binds to `PUBLIC_URL` on first use).
+The Neon branch formerly named `development` is now `production`. It is the root branch and should
+be protected in Neon. Personal branches are reset from production for testing. Once production holds
+client content, never promote schema by restoring a dev snapshot onto production; use Flyway
+migrations from `main` so content is preserved.
 
 > Bootstrap-boundary reminder: migrations V004 and later reference Directus system tables
 > (`directus_users`, `directus_files`) and cannot be applied to a branch until Directus has
@@ -123,14 +124,16 @@ On Windows PowerShell:
 Copy-Item flyway.user.toml.example flyway.user.toml
 ```
 
-Then fill in your Neon/Postgres username and password in `flyway.user.toml`.
+Then fill in your personal Neon branch URL, Neon/Postgres username, and password in
+`flyway.user.toml`.
 
 Each developer uses their own limited login role.
 
 Example for Pierce:
 
 ```toml
-[environments.development]
+[environments.personal]
+url = "jdbc:postgresql://YOUR_PIERCE_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
 user = "pierce_dev"
 password = "your-password"
 ```
@@ -138,7 +141,8 @@ password = "your-password"
 Example for Aaron:
 
 ```toml
-[environments.development]
+[environments.personal]
+url = "jdbc:postgresql://YOUR_AARON_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
 user = "aaron_dev"
 password = "your-password"
 ```
@@ -147,9 +151,9 @@ Do not commit `flyway.user.toml`.
 
 Do not use `neondb_owner` for normal Flyway work. `neondb_owner` is only for one-time administrative setup, such as creating roles or changing role passwords.
 
-### 4. Confirm the shared development database URL
+### 4. Confirm database URLs
 
-The shared development database URL lives in `flyway.toml`.
+The production database URL lives in `flyway.toml` under `[environments.production]`.
 
 Use the Neon direct endpoint, not the `-pooler` endpoint. Flyway migrations need a persistent database session.
 
@@ -159,13 +163,15 @@ The URL format is:
 jdbc:postgresql://<neon-host>/neondb?sslmode=require
 ```
 
-The shared URL belongs in `flyway.toml`. Personal usernames and passwords belong only in `flyway.user.toml`.
+The production URL belongs in `flyway.toml`. Personal branch URLs, usernames, and passwords belong
+only in `flyway.user.toml`.
 
-The shared development database is the default Flyway environment. A bare Flyway command targets shared development unless you explicitly pass another environment.
+The default Flyway environment is `personal`, so a bare Flyway command should target your personal
+branch. Production must be targeted deliberately with `-environment=production`.
 
 ## Database roles
 
-The development database uses separate login roles and a shared migration role.
+The database uses separate login roles and a shared migration role.
 
 Each developer logs in with their own role, such as:
 
@@ -250,22 +256,25 @@ Postgres database access is used for connecting to the database and running Flyw
 
 Normal Flyway work should still use a limited login role such as `pierce_dev` or `aaron_dev`, not `neondb_owner`.
 
-Personal Neon branch have already been created. You do not need to create a branch as part of initial setup. You should
-familiarize yourself with how to keep that branch up to date by resetting it from the shared development parent before testing new migrations.
+Personal Neon branches have already been created. You do not need to create a branch as part of
+initial setup. You should familiarize yourself with how to keep that branch up to date by resetting
+it from the production parent before testing new migrations.
 
 ## Personal Neon branches
 
-Each developer has a personal Neon branch for testing migrations before they are merged and applied to shared development.
+Each developer has a personal Neon branch for testing migrations before they are merged and applied
+to production.
 
 The current model is:
 
 ```text
-development    shared development branch
-pierce_dev     Pierce's personal testing branch
-aaron_dev      Aaron's personal testing branch
+production   root production branch
+pierce_dev   Pierce's personal testing branch
+aaron_dev    Aaron's personal testing branch
 ```
 
-The personal branch is a private copy of the shared development database. It lets you test a migration safely without touching the database everyone else relies on.
+The personal branch is a private copy of production. It lets you test a migration safely without
+touching the live database.
 
 The committed `flyway.toml` includes a `personal` environment, but each developer's actual personal branch URL stays local in their git-ignored `flyway.user.toml`.
 
@@ -273,7 +282,7 @@ Add this to your local `flyway.user.toml`:
 
 ```toml
 [environments.personal]
-url = "jdbc:postgresql://YOUR_PERSONAL_BRANCH_HOST.neon.tech/neondb?sslmode=require"
+url = "jdbc:postgresql://YOUR_PERSONAL_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
 user = "your_dev_login"
 password = "your_dev_password"
 ```
@@ -282,7 +291,7 @@ Example for Pierce:
 
 ```toml
 [environments.personal]
-url = "jdbc:postgresql://YOUR_PIERCE_BRANCH_HOST.neon.tech/neondb?sslmode=require"
+url = "jdbc:postgresql://YOUR_PIERCE_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
 user = "pierce_dev"
 password = "your-password"
 ```
@@ -291,7 +300,7 @@ Example for Aaron:
 
 ```toml
 [environments.personal]
-url = "jdbc:postgresql://YOUR_AARON_BRANCH_HOST.neon.tech/neondb?sslmode=require"
+url = "jdbc:postgresql://YOUR_AARON_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
 user = "aaron_dev"
 password = "your-password"
 ```
@@ -308,20 +317,23 @@ Apply test migrations to your personal branch with:
 flyway migrate -environment=personal
 ```
 
-The `SET ROLE gm_migrator` behavior for the personal environment is already defined in the shared `flyway.toml`, so objects created while testing should be owned by `gm_migrator`, the same as on shared development.
+The `SET ROLE gm_migrator` behavior for the personal environment is already defined in the shared
+`flyway.toml`, so objects created while testing should be owned by `gm_migrator`, the same as on
+production.
 
 ### Keeping your personal branch up to date
 
-Before starting a new schema change, reset your personal branch from the shared development parent in the Neon console.
+Before starting a new schema change, reset your personal branch from the production parent in the
+Neon console.
 
 For example:
 
 ```text
-development -> pierce_dev
-development -> aaron_dev
+production -> pierce_dev
+production -> aaron_dev
 ```
 
-Resetting from parent refreshes your personal branch to match the current shared development branch.
+Resetting from parent refreshes your personal branch to match the current production branch.
 
 This is a destructive refresh of the personal branch. Any test-only changes on your personal branch are discarded. That is expected.
 
@@ -330,8 +342,8 @@ Do not use `flyway clean` to refresh a branch. `clean` is disabled in Flyway con
 Typical reset workflow:
 
 ```text
-1. Make sure shared development is up to date.
-2. Reset your personal Neon branch from the development parent.
+1. Make sure production is up to date with merged migrations.
+2. Reset your personal Neon branch from the production parent.
 3. Pull latest main locally.
 4. Create a Git branch.
 5. Add and test your migration on your personal branch.
@@ -370,9 +382,8 @@ bootstrapped (or you are not touching V004+), a plain `flyway migrate -environme
 fine. The boundary only matters when a branch has the post-bootstrap migrations pending but no
 Directus system tables yet.
 
-Note on shared `development`: confirm whether `development` has itself been bootstrapped and taken
-V004/V005 before assuming a reset personal branch will migrate cleanly. A personal branch inherits
-whatever state `development` is in at reset time.
+Note on production resets: a personal branch inherits whatever state production is in at reset time.
+Production is already bootstrapped and migrated through V005 as of the branch rename.
 
 ## Getting Directus running (`gathering-matters-directus/`)
 
@@ -493,39 +504,42 @@ curl.exe -i http://localhost:8055/gm-library/search
 
 Run these from `gathering-matters-db/`.
 
-Check migration status on shared development:
+Check migration status on your personal branch:
 
 ```bash
 flyway info
 ```
 
-Validate migration files against shared development:
+Validate migration files against your personal branch:
 
 ```bash
 flyway validate
 ```
 
-Apply pending migrations to shared development:
+Apply pending migrations to your personal branch:
 
 ```bash
 flyway migrate
 ```
 
-Because `development` is the default environment, a bare command targets shared development.
+Because `personal` is the default environment, a bare command targets your personal branch.
 
-To target your personal Neon branch, add:
+To target production, add:
 
 ```bash
--environment=personal
+-environment=production
 ```
 
 Examples:
 
 ```bash
-flyway info -environment=personal
-flyway validate -environment=personal
-flyway migrate -environment=personal
+flyway info -environment=production
+flyway validate -environment=production
+flyway migrate -environment=production
 ```
+
+Only run production migrations deliberately from `main`, after the migration has been tested on a
+personal branch and merged.
 
 For normal onboarding, new developers should start with:
 
@@ -534,7 +548,8 @@ flyway info
 flyway validate
 ```
 
-Do not run `flyway migrate` against the shared development database until the team is ready to apply pending migrations from `main`.
+Do not run `flyway migrate -environment=production` until the team is ready to apply merged
+migrations from `main`.
 
 ## Repair command
 
@@ -593,17 +608,19 @@ Rules:
 * If something needs to change, create a new migration.
 * Do not create undo migrations. Flyway Community does not support them.
 
-You may edit a migration while testing locally on your personal Neon branch, as long as that migration has not been applied to a shared database. If you need a clean retest, reset your personal Neon branch from the shared development parent and run the migration again.
+You may edit a migration while testing locally on your personal Neon branch, as long as that
+migration has not been applied to a shared database. If you need a clean retest, reset your
+personal Neon branch from the production parent and run the migration again.
 
 ## Verifying a migration
 
-After running:
+After running on your personal branch:
 
 ```bash
 flyway migrate
 ```
 
-or:
+or explicitly:
 
 ```bash
 flyway migrate -environment=personal
@@ -640,9 +657,9 @@ git pull
 
 ### 2. Refresh your personal Neon branch
 
-In Neon, reset your personal branch from the shared `development` parent.
+In Neon, reset your personal branch from the `production` parent.
 
-This gives you a clean copy of the current shared development database before testing a new migration.
+This gives you a clean copy of the current production database before testing a new migration.
 
 ### 3. Create a Git branch
 
@@ -681,27 +698,28 @@ git push -u origin feature/add-content-items
 
 Open a GitHub pull request and get one review.
 
-Do not apply the migration to shared development before the pull request is merged.
+Do not apply the migration to production before the pull request is merged.
 
 (Or if confident you can just merge yourself)
+
 ### 8. Merge to `main`
 
 After review, merge the pull request into `main`.
 
-### 9. Apply merged migrations to shared development
+### 9. Apply merged migrations to production
 
 From `main`:
 
 ```bash
 git switch main
 git pull
-flyway info
-flyway validate
-flyway migrate
-flyway info
+flyway info -environment=production
+flyway validate -environment=production
+flyway migrate -environment=production
+flyway info -environment=production
 ```
 
-Only migrations merged to `main` should be applied to the shared development database.
+Only migrations merged to `main` should be applied to production.
 
 ## Important rules
 
@@ -722,26 +740,28 @@ Real database passwords should be shared through a password manager or another s
 
 Flyway stores a checksum for each applied migration. If an applied migration file changes, Flyway will detect it and stop.
 
-Fix mistakes on shared databases with a new migration.
+Fix mistakes on production or any shared database with a new migration.
 
 ### Personal branches are for testing
 
 Personal Neon branches are disposable testing copies.
 
-It is fine to reset them from the shared development parent. It is also fine to test a migration there, find a problem, reset the branch, edit the migration, and test again.
+It is fine to reset them from the production parent. It is also fine to test a migration there,
+find a problem, reset the branch, edit the migration, and test again.
 
 Do not treat a personal branch as the source of truth.
 
-### Shared development is migrated only from `main`
+### Production is migrated only from `main`
 
-Never apply an unmerged migration to shared development.
+Never apply an unmerged migration to production.
 
 The safe sequence is:
 
 ```text
-personal branch -> PR -> merge to main -> shared development
+personal branch -> PR -> merge to main -> production
 ```
-If you do it can prevent other migrations from ocurring as a validation error will occur. 
+Applying an unmerged migration to production can block later migrations with validation errors.
+
 ### Fix forward
 
 Flyway Community does not support undo migrations. If a migration needs to be corrected after it has been applied to a shared database, write a new migration that reverses or amends the previous one.
@@ -774,7 +794,9 @@ migration, that is drift to correct, not a shortcut to take.
 
 ## Notes on Flyway configuration
 
-The shared `flyway.toml` config sets the default development environment and points Flyway at the `migrations/` folder.
+The shared `flyway.toml` config points Flyway at the `migrations/` folder and makes `personal`
+the default environment. Production is available as `[environments.production]`, but it is not the
+default.
 
 It also sets:
 
@@ -782,21 +804,23 @@ It also sets:
 initSql = "SET ROLE gm_migrator"
 ```
 
-for both the shared development environment and the personal environment.
+for both the production environment and the personal environment.
 
-This makes Flyway run migrations as the shared `gm_migrator` role after connecting with each developer's personal login role.
+This makes Flyway run migrations as the shared `gm_migrator` role after connecting with a limited
+login role.
 
 `initSql` is currently used for simplicity. If Flyway removes it in a future version, this can move to an `afterConnect.sql` callback in a scanned location.
 
 ## Production
 
-Production is not configured yet.
+Production is configured as an explicit Flyway environment.
 
-When production exists, it should use:
+Production uses:
 
-* a separate Neon database/project/branch
+* the Neon root branch named `production`
 * separate production credentials
-* a separate `[environments.production]` block in `flyway.toml`
+* an explicit `[environments.production]` block in `flyway.toml`
 * explicit production deploy commands from `main`
 
-Do not give normal developers production credentials by default.
+Do not give normal developers production credentials by default. Do not restore dev snapshots onto
+production once it contains client content; promote schema with Flyway migrations.

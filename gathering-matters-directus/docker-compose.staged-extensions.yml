@@ -1,0 +1,12 @@
+# Local development override — opt in explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Bind-mounts a locally built ./extensions directory over the image's baked
+# extensions so you can iterate without rebuilding the image. This file is
+# deliberately NOT named docker-compose.override.yml, because that name is
+# auto-loaded by `docker compose` and would silently hide the baked extensions
+# in every invocation. Keep it opt-in so the default path stays baked-only.
+services:
+  directus:
+    volumes:
+      - ./extensions:/directus/extensions

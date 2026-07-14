@@ -1,12 +1,14 @@
-# Copy this file to flyway.user.toml and fill in your own Neon credentials:
+# Copy this file to flyway.user.toml and fill in your personal Neon branch:
 #
 #     cp flyway.user.toml.example flyway.user.toml
 #
 # flyway.user.toml is git ignored and must never be committed. It holds only
-# your personal login. The shared host and the SET ROLE behaviour are already
-# in flyway.toml, so this file only needs your user and password.
+# your local connection details. The SET ROLE behaviour is already in
+# flyway.toml.
 #
-# Use your own developer login (for example aaron_dev).
+# Bare Flyway commands default to this personal environment. Production is an
+# explicit environment in flyway.toml and should only be targeted deliberately
+# with -environment=production and separately managed credentials.
 
 [environments.development]
 user = "aaron_dev"

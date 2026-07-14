@@ -2,7 +2,7 @@ id = "gathering-matters-database"
 name = "Gathering Matters Database"
 databaseType = "PostgreSQL"
 
-[environments.development]
+[environments.production]
 url = "jdbc:postgresql://ep-bold-bread-afuwwq8t.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 initSql = "SET ROLE gm_migrator"
 
@@ -10,7 +10,7 @@ initSql = "SET ROLE gm_migrator"
 initSql = "SET ROLE gm_migrator"
 
 [flyway]
-environment = "development"
+environment = "personal"
 locations = ["filesystem:migrations"]
 cleanDisabled = true
 
