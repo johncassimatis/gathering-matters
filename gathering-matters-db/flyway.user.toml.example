@@ -9,8 +9,8 @@
 # Use your own developer login (for example aaron_dev).
 
 [environments.development]
-user = "your_dev_login"
-password = "your_dev_password"
+user = "aaron_dev"
+password = 'Y8":8SLx\l5C1C'
 
 # Personal Neon branch for testing migrations before you merge them.
 # Create a branch off dev in the Neon console, then copy its connection details
@@ -19,6 +19,6 @@ password = "your_dev_password"
 # See the README, "Testing on your personal Neon branch".
 #
 # [environments.personal]
-# url = "jdbc:postgresql://YOUR_BRANCH_HOST.neon.tech/neondb?sslmode=require"
-# user = "your_dev_login"
-# password = "your_dev_password"
+# url = postgresql://ep-bold-bread-afuwwq8t.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+# user = "aaron_dev"
+# password = 'Y8":8SLx\l5C1C'
