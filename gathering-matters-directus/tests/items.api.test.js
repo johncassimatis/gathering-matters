@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
+import { testFixtures } from './fixtures.js';
 
-const API_URL = process.env.API_URL || 'http://localhost:8055'; 
+const API_URL = process.env.API_URL || 'http://localhost:8055';
+const fixtures = testFixtures();
 
 describe('GET /gm-library/items/:slug', () => {
 
@@ -16,7 +18,7 @@ describe('GET /gm-library/items/:slug', () => {
 
   // --- 2. VISIBILITY & 404s (Draft/Archived/Future/Missing) ---
   it('Unpublished, future-dated, or missing item: returns 404 not_found', async () => {
-    const res = await request(API_URL).get('/gm-library/items/some-draft-or-missing-slug');
+    const res = await request(API_URL).get(`/gm-library/items/${fixtures.draftSlug}`);
     
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('not_found');
@@ -24,13 +26,8 @@ describe('GET /gm-library/items/:slug', () => {
 
   // --- 3. DATA STRUCTURE & CRITICAL ALLOWLIST ---
   it('CRITICAL: Returns strictly allowed fields for a published item', async () => {
-    const res = await request(API_URL).get('/gm-library/items/valid-published-slug');
+    const res = await request(API_URL).get(`/gm-library/items/${fixtures.publishedSlug}`);
     
-    if (res.status === 404) {
-      console.warn('⚠️ DB empty: Skipping detail allowlist test. Please seed data.');
-      return; 
-    }
-
     expect(res.status).toBe(200);
 
     const allowedKeys = [

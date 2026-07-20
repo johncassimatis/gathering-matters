@@ -1,26 +1,34 @@
 import pg from 'pg';
-import fs from 'fs';
-import toml from 'toml';
-import path from 'path';
+
+const { Client } = pg;
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required test database environment variable: ${name}`);
+  return value;
+}
+
+export function getDbConfig() {
+  const ssl = process.env.TEST_DB_SSL !== 'false'
+    ? { rejectUnauthorized: false }
+    : false;
+
+  if (process.env.TEST_DATABASE_URL) {
+    return { connectionString: process.env.TEST_DATABASE_URL, ssl };
+  }
+
+  return {
+    host: required('TEST_DB_HOST'),
+    port: Number(process.env.TEST_DB_PORT || 5432),
+    database: required('TEST_DB_NAME'),
+    user: required('TEST_DB_USER'),
+    password: required('TEST_DB_PASSWORD'),
+    ssl,
+  };
+}
 
 export async function getDbClient() {
-  const tomlPath = path.resolve(process.cwd(), '../gathering-matters-db/flyway.user.toml');
-  const tomlFile = fs.readFileSync(tomlPath, 'utf-8');
-  const config = toml.parse(tomlFile);
-
-  const personalEnv = config.environments?.personal;
-  if (!personalEnv) throw new Error("Could not find [environments.personal] in flyway.toml");
-
-  let cleanUrl = personalEnv.url.replace(/^jdbc:/, '');
-  const dbUrlObj = new URL(cleanUrl);
-  if (personalEnv.user) dbUrlObj.username = personalEnv.user;
-  if (personalEnv.password) dbUrlObj.password = encodeURIComponent(personalEnv.password);
-
-  const client = new pg.Client({
-    connectionString: dbUrlObj.toString(),
-    ssl: { rejectUnauthorized: false }
-  });
-
+  const client = new Client(getDbConfig());
   await client.connect();
   return client;
 }

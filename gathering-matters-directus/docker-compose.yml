@@ -11,3 +11,12 @@ services:
     env_file: .env
     volumes:
       - ./uploads:/directus/uploads
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-runner
+    image: gathering-matters-directus-test-runner:local
+    env_file: .env.test
+    depends_on:
+      - directus

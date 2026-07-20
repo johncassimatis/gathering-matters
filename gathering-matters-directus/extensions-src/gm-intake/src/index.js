@@ -33,6 +33,7 @@ function normalizeBody(v) {
 const normalizeInline = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
 const isValidEmail = (v) => !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 const hmacHex = (secret, input) => crypto.createHmac('sha256', secret).update(input).digest('hex');
+const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 
 function getRequestIp(req) {
   // Only trustworthy when a controlled proxy overwrites X-Forwarded-For.
@@ -62,16 +63,25 @@ export default {
         const honeypot = normalizeInline(raw.website);
         const consentToReview = raw.consent_to_review === true;
         const consentToContact = raw.consent_to_contact === true;
+        const requestedTestRunId = req.headers['x-gm-test-run-id'];
+        const testRunId = env.GM_TEST_MODE === true || env.GM_TEST_MODE === 'true'
+          ? (isUuid(requestedTestRunId) ? requestedTestRunId : null)
+          : null;
 
         const ip = getRequestIp(req);
         const ipHash = ip ? hmacHex(secret, ip) : null;
         const userAgent = String(req.headers['user-agent'] ?? '').slice(0, MAX_UA);
         const fingerprint = hmacHex(secret, `${source}|${title.toLowerCase()}|${body.toLowerCase()}|${submitterEmail}`);
 
+        const riskDetails = () => JSON.stringify({
+          source,
+          ...(testRunId ? { test_run_id: testRunId } : {}),
+        });
+
         const logRisk = (event_type, submission_id = null) =>
           db('risk_event').insert({
             submission_id, event_type, ip_hash: ipHash, user_agent: userAgent,
-            request_fingerprint: fingerprint, details: JSON.stringify({ source }), created_at: db.fn.now(),
+            request_fingerprint: fingerprint, details: riskDetails(), created_at: db.fn.now(),
           });
 
         if (honeypot !== '') {
@@ -140,7 +150,7 @@ export default {
           await trx('risk_event').insert({
             submission_id: inserted.id, event_type: 'submission_received',
             ip_hash: ipHash, user_agent: userAgent, request_fingerprint: fingerprint,
-            details: JSON.stringify({ source }), created_at: trx.fn.now(),
+            details: riskDetails(), created_at: trx.fn.now(),
           });
 
           return inserted.id;
