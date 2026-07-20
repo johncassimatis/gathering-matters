@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 
-// Assuming Docker maps Directus to port 8055
 const API_URL = process.env.API_URL || 'http://localhost:8055'; 
 
 describe('GET /extensions/gm-library/search', () => {

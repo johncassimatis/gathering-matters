@@ -12,7 +12,10 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "dotenv": "^17.4.2",
+    "pg": "^8.22.0",
     "supertest": "^7.2.2",
+    "toml": "^5.0.0",
     "vitest": "^4.1.10"
   }
 }
