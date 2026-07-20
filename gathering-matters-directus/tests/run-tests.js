@@ -1,6 +1,12 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import dotenv from 'dotenv';
+
+// Local runs load the ignored .env.test file. Render/CI environment variables
+// remain authoritative because dotenv does not override existing variables.
+dotenv.config({ path: process.env.TEST_ENV_FILE || '.env.test', quiet: true });
+
 import { getDbClient } from './db_helper.js';
 import { testFixtures } from './fixtures.js';
 import { seedDatabase } from './seed.js';
