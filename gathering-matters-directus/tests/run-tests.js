@@ -22,7 +22,10 @@ function runVitest() {
 }
 
 async function waitForApi() {
-  const healthUrl = `${process.env.API_URL || 'http://localhost:8055'}/server/health`;
+  // /server/health is permission-protected in this deployment. /server/ping
+  // is the public liveness endpoint; the database connection is verified
+  // separately before this check.
+  const healthUrl = `${process.env.API_URL || 'http://localhost:8055'}/server/ping`;
   for (let attempt = 1; attempt <= 60; attempt += 1) {
     try {
       const response = await fetch(healthUrl);

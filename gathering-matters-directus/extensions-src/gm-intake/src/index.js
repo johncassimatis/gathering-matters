@@ -164,7 +164,9 @@ export default {
           },
         });
       } catch (error) {
-        const code = error.extensions?.code;
+        // Directus errors expose the machine-readable code on `error.code`.
+        // `error.extensions` contains constructor payload such as `reason`.
+        const code = error.code;
         if (code === 'INVALID_REQUEST' || code === 'VALIDATION_FAILED' || code === 'RATE_LIMITED') {
           return next(error);
         }

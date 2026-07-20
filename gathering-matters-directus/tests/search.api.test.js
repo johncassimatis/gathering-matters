@@ -23,7 +23,10 @@ describe('GET /extensions/gm-library/search', () => {
   });
 
   it('Pagination is STRICT: 400 invalid_pagination', async () => {
-    const res = await request(API_URL).get(`/gm-library/search?limit=12junk`);
+    // Directus validates non-numeric reserved query values before the custom
+    // endpoint runs. Zero is numeric, so it reaches parseLimit and exercises
+    // the endpoint's own range validation.
+    const res = await request(API_URL).get(`/gm-library/search?limit=0`);
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('invalid_pagination');
   });
