@@ -20,10 +20,14 @@ export default {
       throw new ForbiddenError();
     }
 
+    const rawPromotionRoleIds = env.GM_PROMOTION_ROLE_IDS ?? '';
+    const promotionRoleIds = Array.isArray(rawPromotionRoleIds)
+      ? rawPromotionRoleIds
+      : String(rawPromotionRoleIds).split(',');
+
     const allowedRoleIds = new Set(
-      (env.GM_PROMOTION_ROLE_IDS ?? '')
-        .split(',')
-        .map((v) => v.trim())
+      promotionRoleIds
+        .map((value) => String(value).trim())
         .filter(Boolean)
     );
 
