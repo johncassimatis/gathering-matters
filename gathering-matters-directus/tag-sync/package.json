@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Hybrid tag sync: pushes Directus M2M topic/audience/region tags into Framer Topics/Audiences/Regions multi-reference fields. Runs alongside (not instead of) the official Directus Framer plugin.",
+  "description": "Directus->Framer reconciliation: syncs Topics/Audiences/Regions multi-reference tags AND removes stale Framer content + content types no longer eligible/valid in Directus. Runs alongside (not instead of) the official Directus Framer plugin.",
   "scripts": {
-    "sync": "node sync.mjs --apply",
-    "dry-run": "node sync.mjs --dry-run"
+    "sync:framer-tags": "node sync.mjs --apply",
+    "sync:framer-tags:dry-run": "node sync.mjs --dry-run"
   },
   "dependencies": {
     "framer-api": "0.1.25"

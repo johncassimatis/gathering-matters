@@ -1,136 +1,169 @@
-// Hybrid tag sync: Directus M2M tags -> Framer Topics/Audiences/Regions multi-reference fields.
-// Read-only on Directus; writes ONLY the tag collections + 3 multi-ref fields on the content collection.
-// Never touches plugin-owned content fields. Idempotent full reconcile.
+// gm-framer reconciliation: Directus -> Framer.
+// Owns (custom side, runs alongside the official Directus plugin):
+//   - Topics / Audiences / Regions collections + their multi-reference assignments
+//   - REMOVAL of Framer content whose Directus UUID is no longer Framer-eligible
+//   - REMOVAL of stale Framer Content Types that are inactive in Directus AND unreferenced
+// Never touches plugin-owned content fields (title/body/summary/author/content-type/etc.),
+// and never touches the FAQ or "How it works" collections.
 //
-// Env: DIRECTUS_URL, DIRECTUS_TOKEN (read-only), FRAMER_PROJECT, FRAMER_API_KEY (or key file), CONTENT_COLLECTION
-// Flags: --dry-run (print plan, no writes) | --apply (default) | --publish (also publish the site)
+// Env: DIRECTUS_URL, DIRECTUS_TOKEN (read-only), FRAMER_PROJECT, FRAMER_API_KEY (or FRAMER_KEY_FILE),
+//      CONTENT_COLLECTION (default "Directus"), TYPES_COLLECTION (default "Content Types"),
+//      MAX_DELETES (default 10)
+// Flags: --dry-run (plan only) | --apply (default) | --force (override mass-deletion guard) | --publish
 import { connect } from "framer-api";
 import fs from "node:fs";
 
 const DIRECTUS_URL = (process.env.DIRECTUS_URL || "").replace(/\/$/, "");
 const DIRECTUS_TOKEN = process.env.DIRECTUS_TOKEN;
 const FRAMER_PROJECT = process.env.FRAMER_PROJECT;
-const KEY_FILE = process.env.FRAMER_KEY_FILE; // optional local convenience; env var is preferred
+const KEY_FILE = process.env.FRAMER_KEY_FILE;
 const FRAMER_API_KEY = process.env.FRAMER_API_KEY
-  || (KEY_FILE && fs.existsSync(KEY_FILE) && (fs.readFileSync(KEY_FILE, "utf8").match(/fr_[A-Za-z0-9]+/) || [])[0])
-  || "";
+  || (KEY_FILE && fs.existsSync(KEY_FILE) && (fs.readFileSync(KEY_FILE, "utf8").match(/fr_[A-Za-z0-9]+/) || [])[0]) || "";
 const CONTENT = process.env.CONTENT_COLLECTION || "Directus";
-const DRY_RUN = process.argv.includes("--dry-run") || process.env.DRY_RUN === "1";
+const TYPES = process.env.TYPES_COLLECTION || "Content Types";
+const MAX_DELETES = Number(process.env.MAX_DELETES || 10);
+const DRY_RUN = process.argv.includes("--dry-run");
+const FORCE = process.argv.includes("--force");
 const PUBLISH = process.argv.includes("--publish");
-
-const DIMS = [ // Directus tag.dimension  ->  Framer collection name / field name
-  { dim: "topic",    coll: "Topics",    field: "topics" },
+const DIMS = [
+  { dim: "topic", coll: "Topics", field: "topics" },
   { dim: "audience", coll: "Audiences", field: "audiences" },
-  { dim: "region",   coll: "Regions",   field: "regions" },
+  { dim: "region", coll: "Regions", field: "regions" },
 ];
 
 if (!DIRECTUS_URL || !DIRECTUS_TOKEN || !FRAMER_PROJECT || !FRAMER_API_KEY) {
-  console.error("Missing config. Need DIRECTUS_URL, DIRECTUS_TOKEN, FRAMER_PROJECT, FRAMER_API_KEY(or key file)."); process.exit(2);
+  console.error("Missing config (DIRECTUS_URL, DIRECTUS_TOKEN, FRAMER_PROJECT, FRAMER_API_KEY)."); process.exit(2);
 }
 const log = (...a) => console.log(...a);
-const plan = []; // human-readable planned changes
+const sameSet = (a, b) => a.length === b.length && new Set([...a, ...b]).size === new Set(a).size;
 
+// ---- Directus reads (FAIL-CLOSED: any non-2xx throws and aborts the whole run before any write) ----
 async function dx(path) {
   const r = await fetch(DIRECTUS_URL + path, { headers: { Authorization: "Bearer " + DIRECTUS_TOKEN } });
-  if (!r.ok) throw new Error(`Directus ${path} -> ${r.status} ${await r.text()}`);
-  return (await r.json()).data;
+  if (!r.ok) throw new Error(`Directus read failed (${r.status}) for ${path} — aborting (fail-closed).`);
+  const body = await r.json();
+  if (!body || !Array.isArray(body.data)) throw new Error(`Directus returned unexpected shape for ${path} — aborting (fail-closed).`);
+  return body.data;
 }
 
-// ---------- 1. Read Directus (read-only) ----------
-// The read token's permission already restricts `tag` to active rows (server-side filter),
-// so we don't (and can't) filter on is_active here. Inactive tags simply don't appear and get pruned.
+// The read-only token is filtered server-side to Framer-eligible content + active tags/types,
+// so what it returns IS the source-of-truth set.
 const tags = await dx("/items/tag?fields=id,name,slug,dimension&limit=-1");
 const junction = await dx("/items/content_item_tag?fields=content_item_id,tag_id&limit=-1");
-const activeIds = new Set(tags.map(t => t.id));
+const eligible = await dx("/items/content_item?fields=id&limit=-1");
+const activeTypes = await dx("/items/content_type?fields=id,slug&limit=-1");
+const eligibleIds = new Set(eligible.map((x) => x.id));
+const activeTypeKeys = new Set([...activeTypes.map((t) => t.id), ...activeTypes.map((t) => t.slug)]);
 const tagsByDim = { topic: [], audience: [], region: [] };
 for (const t of tags) (tagsByDim[t.dimension] ||= []).push(t);
-const itemTagIds = new Map(); // content_item_id(uuid) -> Set(tag_id) [active only]
+const activeTagIds = new Set(tags.map((t) => t.id));
+const itemTagIds = new Map();
 for (const j of junction) {
-  if (!activeIds.has(j.tag_id)) continue;
+  if (!activeTagIds.has(j.tag_id)) continue;
   if (!itemTagIds.has(j.content_item_id)) itemTagIds.set(j.content_item_id, new Set());
   itemTagIds.get(j.content_item_id).add(j.tag_id);
 }
-log(`Directus (read-only): ${tags.length} active tags (topic=${tagsByDim.topic.length}, audience=${tagsByDim.audience.length}, region=${tagsByDim.region.length}); ${junction.length} junction rows; ${itemTagIds.size} items with tags.`);
+log(`Directus (read-only): eligible content=${eligibleIds.size}, active types=${activeTypeKeys.size / 2}, active tags=${tags.length}, junction rows=${junction.length}`);
 
-// ---------- 2. Framer ----------
+// ---- Framer ----
 const framer = await connect(FRAMER_PROJECT, FRAMER_API_KEY);
 let cols = await framer.getCollections();
-const content = cols.find(c => c.name === CONTENT);
-if (!content) { console.error(`Content collection '${CONTENT}' not found in Framer.`); process.exit(2); }
+const content = cols.find((c) => c.name === CONTENT);
+if (!content) { console.error(`Framer content collection '${CONTENT}' not found.`); process.exit(2); }
 const contentItems = await content.getItems();
 const contentFields = await content.getFields();
-const bySlug = new Map(contentItems.map(i => [i.slug, i])); // slug == content_item UUID
-log(`Framer '${CONTENT}': ${contentItems.length} items, ${contentFields.length} fields.`);
+const ctField = contentFields.find((f) => f.name === "Content Type Id");
+const typesCol = cols.find((c) => c.name === TYPES);
+const typeItems = typesCol ? await typesCol.getItems() : [];
+log(`Framer '${CONTENT}': ${contentItems.length} items | '${TYPES}': ${typeItems.length} items`);
 
-const sameSet = (a, b) => a.length === b.length && new Set(a).size === new Set([...a, ...b]).size;
+// ============ PLAN (no writes) ============
+const plan = { tagOps: [], contentDeletes: [], typeDeletes: [] };
 
+// content: delete Framer items whose UUID (slug) is not eligible in Directus
+const contentDeletes = contentItems.filter((i) => !eligibleIds.has(i.slug));
+plan.contentDeletes = contentDeletes;
+
+// remaining content after deletion -> which content types stay referenced
+const remaining = contentItems.filter((i) => eligibleIds.has(i.slug));
+const referencedTypeKeys = new Set(remaining.map((i) => ctField && i.fieldData[ctField.id]?.value).filter(Boolean));
+// stale types: not active in Directus AND not referenced by any remaining content
+const typeDeletes = typeItems.filter((i) => !activeTypeKeys.has(i.slug) && !referencedTypeKeys.has(i.slug));
+plan.typeDeletes = typeDeletes;
+
+// tag collections plan (upserts + prunes) — computed to also count destructive tag prunes for the guard
+const tagWork = [];
 for (const { dim, coll, field } of DIMS) {
-  // 2a. ensure dimension collection
-  let dc = cols.find(c => c.name === coll);
-  if (!dc) {
-    plan.push(`CREATE collection '${coll}'`);
-    if (!DRY_RUN) { dc = await framer.createCollection(coll); cols = await framer.getCollections(); }
-  }
-  // 2b. reconcile tag items in the dimension collection (keyed by slug)
-  const desired = tagsByDim[dim]; // active tags for this dim
-  // ensure a 'Name' field exists on the dimension collection (new collections have only a Slug)
-  let nameField = dc ? (await dc.getFields()).find(f => f.name === "Name") : null;
-  if (dc && !nameField) {
-    plan.push(`  ${coll}: ADD field 'Name'`);
-    if (!DRY_RUN) { const cr = await dc.addFields([{ type: "string", name: "Name" }]); nameField = cr[0]; }
-  }
-  const existingItems = dc ? await dc.getItems() : [];
-  const exBySlug = new Map(existingItems.map(i => [i.slug, i]));
-  // upserts
-  for (const t of desired) {
-    const ex = exBySlug.get(t.slug);
-    if (!ex) plan.push(`  ${coll}: ADD tag '${t.slug}' (${t.name})`);
-    else if (nameField && ex.fieldData[nameField.id]?.value !== t.name) plan.push(`  ${coll}: RENAME tag '${t.slug}' -> '${t.name}'`);
-    if (!DRY_RUN && dc) {
-      const fd = nameField ? { [nameField.id]: { type: "string", value: t.name } } : {};
-      if (ex) await dc.addItems([{ id: ex.id, fieldData: fd }]);
-      else await dc.addItems([{ slug: t.slug, fieldData: fd }]);
-    }
-  }
-  // removals (inactive/deleted)
-  const desiredSlugs = new Set(desired.map(t => t.slug));
-  const staleIds = [];
-  for (const i of existingItems) if (!desiredSlugs.has(i.slug)) { plan.push(`  ${coll}: REMOVE tag '${i.slug}'`); staleIds.push(i.id); }
-  // 2c. ensure multi-ref field on content collection
-  const hasField = contentFields.some(f => f.name === field);
-  if (!hasField) {
-    plan.push(`ADD field '${field}' (multiCollectionReference -> ${coll}) on '${CONTENT}'`);
-    if (!DRY_RUN && dc) { await content.addFields([{ type: "multiCollectionReference", name: field, collectionId: dc.id }]); }
-  }
-  // 2d. slug->framerId map for this dim (re-read after upserts)
-  const nowItems = dc && !DRY_RUN ? await dc.getItems() : existingItems;
-  const slugToId = new Map(nowItems.map(i => [i.slug, i.id]));
-  // 2e. set assignments on each content item
-  // NB: a multiCollectionReference READS as an array of referenced-item slugs but is WRITTEN as ids.
-  const fld = DRY_RUN ? contentFields.find(f => f.name === field) : (await content.getFields()).find(f => f.name === field);
-  let changed = 0;
-  for (const item of contentItems) {
-    const tagIds = itemTagIds.get(item.slug) || new Set();   // item.slug == content_item UUID
-    const dimTags = desired.filter(t => tagIds.has(t.id));
-    const wantSlugs = dimTags.map(t => t.slug);
-    const cur = (fld && item.fieldData[fld.id]?.value) || [];  // slugs
-    if (!sameSet(cur, wantSlugs)) {
-      changed++;
-      if (!DRY_RUN) {
-        const wantIds = dimTags.map(t => slugToId.get(t.slug)).filter(Boolean);
-        await content.addItems([{ id: item.id, fieldData: { [fld.id]: { type: "multiCollectionReference", value: wantIds } } }]);
-      }
-    }
-  }
-  plan.push(`ASSIGN ${field}: ${changed} content item(s) ${DRY_RUN ? "would get" : "updated with"} ${dim} tags`);
-  // 2f. prune stale tag items (after refs cleared)
-  if (!DRY_RUN && dc && staleIds.length) await dc.removeItems(staleIds);
+  let dc = cols.find((c) => c.name === coll);
+  const existing = dc ? await dc.getItems() : [];
+  const exBySlug = new Map(existing.map((i) => [i.slug, i]));
+  const desired = tagsByDim[dim];
+  const desiredSlugs = new Set(desired.map((t) => t.slug));
+  const removals = existing.filter((i) => !desiredSlugs.has(i.slug));
+  tagWork.push({ dim, coll, field, dc, existing, exBySlug, desired, removals });
+  if (!dc) plan.tagOps.push(`create collection '${coll}'`);
+  for (const t of desired) if (!exBySlug.has(t.slug)) plan.tagOps.push(`${coll}: add '${t.slug}'`);
+  for (const r of removals) plan.tagOps.push(`${coll}: REMOVE '${r.slug}'`);
 }
 
+// ---- print plan ----
 log("\n================ PLAN ================");
-if (!plan.length) log("(no changes — Framer already matches Directus)");
-else plan.forEach(p => log(" - " + p));
+log(`content items to DELETE from '${CONTENT}': ${contentDeletes.length}`);
+contentDeletes.slice(0, 50).forEach((i) => log(`   - ${i.slug}`));
+log(`content types to DELETE from '${TYPES}': ${typeDeletes.length}`);
+typeDeletes.forEach((i) => log(`   - ${i.slug}`));
+log(`tag collection ops: ${plan.tagOps.length}`);
+plan.tagOps.slice(0, 30).forEach((o) => log(`   - ${o}`));
 log("=====================================");
-if (DRY_RUN) log("DRY-RUN: no Framer writes performed.");
-else { log("APPLIED to Framer."); if (PUBLISH) { const r = await framer.publish(); log("published:", r?.deployment?.id || "ok"); } }
+
+// ---- MASS-DELETION GUARD ----
+const tagRemovalCount = tagWork.reduce((n, w) => n + w.removals.length, 0);
+const destructive = contentDeletes.length + typeDeletes.length + tagRemovalCount;
+log(`destructive deletions planned: ${destructive} (content ${contentDeletes.length} + types ${typeDeletes.length} + tag-prunes ${tagRemovalCount}); guard limit ${MAX_DELETES}`);
+if (destructive > MAX_DELETES && !FORCE) {
+  console.error(`\nABORT: planned deletions (${destructive}) exceed MAX_DELETES (${MAX_DELETES}).`);
+  console.error("Re-run with --force to authorize this large reconciliation intentionally.");
+  process.exit(3);
+}
+if (destructive > MAX_DELETES && FORCE) log(`(mass-deletion guard overridden by --force)`);
+
+if (DRY_RUN) { log("\nDRY-RUN: no Framer writes performed."); process.exit(0); }
+
+// ============ EXECUTE (safe order) ============
+// 1) delete stale content first (frees content-type references)
+if (contentDeletes.length) { await content.removeItems(contentDeletes.map((i) => i.id)); log(`deleted ${contentDeletes.length} stale content item(s)`); }
+
+// 2) tag collections: ensure, upsert active tags, set assignments on remaining content, prune stale tags
+for (const w of tagWork) {
+  let { dim, coll, field, dc, exBySlug, desired, removals } = w;
+  if (!dc) { dc = await framer.createCollection(coll); cols = await framer.getCollections(); }
+  let nameField = (await dc.getFields()).find((f) => f.name === "Name");
+  if (!nameField) nameField = (await dc.addFields([{ type: "string", name: "Name" }]))[0];
+  for (const t of desired) {
+    const ex = exBySlug.get(t.slug);
+    const fd = { [nameField.id]: { type: "string", value: t.name } };
+    if (ex) await dc.addItems([{ id: ex.id, fieldData: fd }]);
+    else await dc.addItems([{ slug: t.slug, fieldData: fd }]);
+  }
+  if (!contentFields.some((f) => f.name === field)) await content.addFields([{ type: "multiCollectionReference", name: field, collectionId: dc.id }]);
+  const fld = (await content.getFields()).find((f) => f.name === field);
+  const nowItems = await dc.getItems();
+  const slugToId = new Map(nowItems.map((i) => [i.slug, i.id]));
+  const liveContent = await content.getItems(); // after content deletion
+  for (const item of liveContent) {
+    const ids = itemTagIds.get(item.slug) || new Set();
+    const want = desired.filter((t) => ids.has(t.id));
+    const cur = (item.fieldData[fld.id]?.value) || [];
+    if (!sameSet(cur, want.map((t) => t.slug))) {
+      await content.addItems([{ id: item.id, fieldData: { [fld.id]: { type: "multiCollectionReference", value: want.map((t) => slugToId.get(t.slug)).filter(Boolean) } } }]);
+    }
+  }
+  if (removals.length) await dc.removeItems(removals.map((i) => i.id));
+}
+
+// 3) delete stale, now-unreferenced content types
+if (typeDeletes.length && typesCol) { await typesCol.removeItems(typeDeletes.map((i) => i.id)); log(`deleted ${typeDeletes.length} stale content type(s)`); }
+
+log("\nRECONCILIATION APPLIED.");
+if (PUBLISH) { const r = await framer.publish(); log("published:", r?.deployment?.id || "ok"); }
 process.exit(0);

@@ -1,21 +1,30 @@
-# gm-tag-sync — Directus → Framer tag sync
+# gm-framer sync/reconciliation (a.k.a. framer-tags)
 
-Pushes Directus many-to-many tags (topic / audience / region) into Framer as
-**Multi Collection Reference** fields, so designers can build native Framer lists
-and carousels filtered by `Topics contains …`, `Audiences contains …`, etc.
-
-This runs **alongside** the official Directus Framer plugin — it does **not** replace it.
+Two jobs, one command, run **alongside** the official Directus Framer plugin (never replacing it):
+1. **Tags** — pushes Directus many-to-many tags (topic/audience/region) into Framer `Topics`/`Audiences`/`Regions`
+   **Multi Collection Reference** fields, so designers build native Framer lists/carousels filtered by
+   `Topics contains …`, `Audiences contains …`, etc.
+2. **Removal reconciliation** — the plugin creates/updates but never deletes. This removes Framer records that
+   are no longer valid in Directus: **content items** whose Directus UUID is no longer Framer-eligible
+   (e.g. archived), and **stale Content Types** that are inactive in Directus **and** no longer referenced.
 
 ```
 Directus (source of truth)
- ├─ Official Directus plugin  → title, body, summary, content type, author, dates …
- └─ gm-tag-sync (this)        → Topics / Audiences / Regions collections + the
-                                topics/audiences/regions multi-ref fields ONLY
+ ├─ Official Directus plugin  → creates/updates content + normal fields + content types
+ └─ this reconciliation       → Topics/Audiences/Regions + tag assignments,
+                                and REMOVAL of stale content / stale content types
 ```
 
-The plugin owns normal content fields; this sync owns only the three tag collections
-and the three multi-reference fields. Proven to coexist safely when the plugin's
-**"Always overwrite (skip conflict screen)"** option is enabled.
+The plugin owns normal content fields and content-type creation; this script owns the three tag
+collections/fields and the *removal* of Directus-managed records that fell out of eligibility. It
+**never** writes plugin-owned content fields. Coexists safely with the plugin's
+**"Always overwrite (skip conflict screen)"** option enabled.
+
+**Framer-eligibility (the source-of-truth rule this reconciliation enforces):**
+```
+status = published  AND  published_at IS NOT NULL  AND  published_at <= now  AND  slug IS NOT NULL
+```
+An **archived** item is therefore ineligible → removed from Framer on the next run. ("Retire" = `status = archived`.)
 
 ## ⭐ Workflow — always follow this order
 ```
@@ -30,14 +39,27 @@ TAG-ONLY changes (tags on content already in Framer):
 > Manage tags in **Directus** only.
 
 ## What it does (idempotent, full reconcile each run)
-- Reads (read-only) active `tag` rows + the `content_item_tag` junction from Directus.
-- Ensures Framer collections `Topics`, `Audiences`, `Regions` exist (each with a `Name` field).
-- Ensures `topics`, `audiences`, `regions` multi-ref fields exist on the content collection (`Directus`).
-- Upserts active tags into their dimension collection (by slug; updates `Name` on rename).
-- Sets each content item's three fields to its exact current active tags (matched by the
-  content_item **UUID**, which is the Framer item slug — never by title).
-- Removes tags/assignments that are no longer active or no longer present.
-- Never writes plugin-owned content fields. Re-running with no changes is a no-op.
+- Reads (read-only) active `tag`, `content_item_tag`, eligible `content_item`, and active `content_type`
+  from Directus. The read token is filtered server-side to eligible/active rows, so its results **are**
+  the source-of-truth set.
+- **Tags:** ensures `Topics`/`Audiences`/`Regions` exist (each with a `Name` field) + the
+  `topics`/`audiences`/`regions` multi-ref fields on `Directus`; upserts active tags (updates `Name`
+  on rename); sets each content item's tag fields to its exact active tags (matched by content_item
+  **UUID** = Framer slug, never title); prunes tags no longer active.
+- **Removal:** deletes Framer `Directus` items whose UUID is not in the eligible set; deletes
+  `Content Types` items that are inactive in Directus **and** unreferenced by any remaining content.
+- Never writes plugin-owned content fields; never touches `FAQ` or `How it works`. Re-running with no
+  changes is a **no-op**.
+
+### Safeguards (this deletes production Framer records, so it's defensive)
+- **Fail-closed reads:** any non-2xx / malformed Directus response **aborts** before any write — a read
+  failure can never be mistaken for an "empty source set" that would delete everything.
+- **UUID-only matching:** only records positively identified as Directus-managed (by UUID) are deletable;
+  manual/arbitrary Framer records are never touched.
+- **Referenced-type guard:** a content type is never deleted while any remaining Framer content references it.
+- **Mass-deletion guard:** if total deletions exceed `MAX_DELETES` (default 10), the run **aborts** unless
+  you pass `--force` (for an intentional large cleanup). Dry-run always prints the full plan first.
+- **Idempotent:** a second run with no Directus changes is a clean no-op.
 
 ## Prerequisites
 1. **Directus read-only token** — the Framer Sync static token, whose policy must include
@@ -81,6 +103,19 @@ attach tags to it (a brand-new Directus item must already exist as a Framer `Dir
 
 For **tag-only** edits on content that's already in Framer, skip step 2 and run the two
 repository-root commands above, then review and publish.
+
+**Large cleanups (mass-deletion guard):** if a run would delete more than `MAX_DELETES` (default 10)
+records — e.g. archiving many items at once — it aborts and asks for confirmation. Re-run the dry-run
+to inspect the plan, then authorize it explicitly:
+
+```powershell
+npm run sync:framer-tags:dry-run -- --force   # preview the full large plan
+npm run sync:framer-tags -- --force           # apply it
+```
+
+Removing content is driven entirely by **Directus**: to retire content, set `status = archived` in
+Directus (do not delete Framer records by hand) — the next reconciliation removes the now-ineligible
+Framer items automatically.
 
 Secrets live in `.env` (git-ignored) or real env vars — never in Git.
 
