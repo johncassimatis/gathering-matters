@@ -1,0 +1,9 @@
+{
+  "name": "gathering-matters-database-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync:framer-tags:dry-run": "node scripts/run-framer-tag-sync.mjs --dry-run",
+    "sync:framer-tags": "node scripts/run-framer-tag-sync.mjs --apply"
+  }
+}

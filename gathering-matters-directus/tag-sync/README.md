@@ -47,29 +47,40 @@ TAG-ONLY changes (tags on content already in Framer):
 2. **Framer Server API key** — Framer Site Settings → General → API. Project-scoped, write-capable.
 3. Node 20+ (uses `--env-file`). `npm ci` once to install `framer-api`.
 
-## Manual run (current, no-cost workflow)
+## One-time setup
+
+Run these commands from the repository root once per checkout or machine:
+
+```powershell
+npm --prefix gathering-matters-directus/tag-sync ci
+Copy-Item gathering-matters-directus/tag-sync/.env.example gathering-matters-directus/tag-sync/.env
+```
+
+Fill in `gathering-matters-directus/tag-sync/.env` with the Directus read-only token,
+Framer project, and Framer Server API key. The `.env` file is git-ignored and must never
+be committed.
+
+## Normal operation
+
 **Order matters** — the plugin must sync new content into Framer *before* the tag-sync can
 attach tags to it (a brand-new Directus item must already exist as a Framer `Directus` item):
 
 1. Edit/publish content **and** tags in Directus.
 2. Framer → **"Sync from Directus"** (with **Always overwrite** enabled) — brings content items in.
-3. Run **this tag-sync** (`--apply`) — attaches topics/audiences/regions.
+3. From the repository root, preview and then run the tag sync:
+
+   ```powershell
+   npm run sync:framer-tags:dry-run
+   npm run sync:framer-tags
+   ```
+
+   These commands reuse `sync.mjs` with the production-configured `.env`; the first is
+   read-only and the second applies the Framer changes.
 4. Review in Framer.
 5. **Publish** in Framer.
 
-For **tag-only** edits on content that's already in Framer, you can skip steps 2 — just run the tag-sync (3) then review/publish.
-
-```bash
-cd gathering-matters-directus/tag-sync
-npm ci                       # first time only
-cp .env.example .env         # then fill in the 4 secrets/values (git-ignored)
-
-# preview (no writes):
-node --env-file=.env sync.mjs --dry-run
-
-# apply:
-node --env-file=.env sync.mjs --apply
-```
+For **tag-only** edits on content that's already in Framer, skip step 2 and run the two
+repository-root commands above, then review and publish.
 
 Secrets live in `.env` (git-ignored) or real env vars — never in Git.
 
