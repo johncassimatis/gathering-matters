@@ -1,0 +1,14 @@
+{
+  "name": "gm-tag-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hybrid tag sync: pushes Directus M2M topic/audience/region tags into Framer Topics/Audiences/Regions multi-reference fields. Runs alongside (not instead of) the official Directus Framer plugin.",
+  "scripts": {
+    "sync": "node sync.mjs --apply",
+    "dry-run": "node sync.mjs --dry-run"
+  },
+  "dependencies": {
+    "framer-api": "0.1.25"
+  }
+}
