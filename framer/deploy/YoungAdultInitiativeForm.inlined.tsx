@@ -21,6 +21,7 @@
 // Requires the shared code file `gmFormValidation.ts` in the same Framer project.
 
 import React, { useEffect, useRef, useState } from "react"
+import { addPropertyControls, ControlType } from "framer"
 // @ts-ignore
 import { parsePhoneNumberFromString, AsYouType } from "https://esm.sh/libphonenumber-js@1.13.9"
 
@@ -46,6 +47,204 @@ import { parsePhoneNumberFromString, AsYouType } from "https://esm.sh/libphonenu
 // content on the published (HTTPS) Framer site.
 export const GM_API_URL = "https://cms.gatheringmatters.com/gm-intake/submissions"
 
+// Designer-facing visual tokens. These deliberately contain only presentation
+// concerns. Submission fields, validation, consent, anti-spam, and the API URL
+// remain implementation details of the form components.
+export type GmFormAlignment = "left" | "center" | "right"
+
+export interface GmFormDesign {
+    colors: {
+        cardBackground: string
+        cardBorder: string
+        headingRule: string
+        inputBackground: string
+        text: string
+        mutedText: string
+        border: string
+        borderHover: string
+        focus: string
+        accent: string
+        accentHover: string
+        accentActive: string
+        buttonText: string
+        error: string
+        errorBackground: string
+        formErrorBackground: string
+        success: string
+        successBackground: string
+        successBorder: string
+    }
+    typography: {
+        bodyFontFamily: string
+        headingFontFamily: string
+        bodySize: number
+        labelSize: number
+        helperSize: number
+        headingSize: number
+        headingWeight: number
+        bodyLineHeight: number
+        headingLineHeight: number
+    }
+    layout: {
+        maxWidth: number
+        cardRadius: number
+        cardPaddingTop: number
+        cardPaddingRight: number
+        cardPaddingBottom: number
+        cardPaddingLeft: number
+        formGap: number
+        fieldGap: number
+        nameGap: number
+        textareaMinHeight: number
+        headingAlign: GmFormAlignment
+        buttonAlign: GmFormAlignment
+    }
+    controls: {
+        height: number
+        radius: number
+        padding: number
+    }
+    button: {
+        minWidth: number
+        height: number
+        radius: number
+        horizontalPadding: number
+        fontSize: number
+        fontWeight: number
+    }
+}
+
+export type GmFormDesignInput = {
+    [K in keyof GmFormDesign]?: Partial<GmFormDesign[K]>
+}
+
+export const GM_FORM_DESIGN_DEFAULTS: GmFormDesign = {
+    colors: {
+        cardBackground: "#FFFDF8",
+        cardBorder: "#EAE6DA",
+        headingRule: "#E0E4E8",
+        inputBackground: "#FFFFFF",
+        text: "#25313B",
+        mutedText: "#5B6670",
+        border: "#D9DEE3",
+        borderHover: "#B9C2CB",
+        focus: "#1D1D7A",
+        accent: "#1D1D7A",
+        accentHover: "#17175F",
+        accentActive: "#101043",
+        buttonText: "#FFFFFF",
+        error: "#B42318",
+        errorBackground: "#FDF4F4",
+        formErrorBackground: "rgba(180,35,24,.08)",
+        success: "#1E4D2B",
+        successBackground: "#EEF6F0",
+        successBorder: "#CBE3D1",
+    },
+    typography: {
+        bodyFontFamily: "inherit",
+        headingFontFamily: "Manrope, sans-serif",
+        bodySize: 16,
+        labelSize: 14,
+        helperSize: 13,
+        headingSize: 27,
+        headingWeight: 800,
+        bodyLineHeight: 1.5,
+        headingLineHeight: 1.2,
+    },
+    layout: {
+        maxWidth: 492,
+        cardRadius: 12,
+        cardPaddingTop: 24,
+        cardPaddingRight: 32,
+        cardPaddingBottom: 28,
+        cardPaddingLeft: 32,
+        formGap: 16,
+        fieldGap: 6,
+        nameGap: 16,
+        textareaMinHeight: 140,
+        headingAlign: "center",
+        buttonAlign: "right",
+    },
+    controls: { height: 48, radius: 8, padding: 12 },
+    button: {
+        minWidth: 220,
+        height: 48,
+        radius: 24,
+        horizontalPadding: 24,
+        fontSize: 16,
+        fontWeight: 600,
+    },
+}
+
+export function resolveGmFormDesign(input: GmFormDesignInput = {}): GmFormDesign {
+    return {
+        colors: { ...GM_FORM_DESIGN_DEFAULTS.colors, ...(input.colors || {}) },
+        typography: {
+            ...GM_FORM_DESIGN_DEFAULTS.typography,
+            ...(input.typography || {}),
+        },
+        layout: { ...GM_FORM_DESIGN_DEFAULTS.layout, ...(input.layout || {}) },
+        controls: { ...GM_FORM_DESIGN_DEFAULTS.controls, ...(input.controls || {}) },
+        button: { ...GM_FORM_DESIGN_DEFAULTS.button, ...(input.button || {}) },
+    }
+}
+
+const px = (value: number) => `${value}px`
+const align = (value: GmFormAlignment) =>
+    value === "left" ? "flex-start" : value === "right" ? "flex-end" : "center"
+
+export function gmFormStyleVars(design: GmFormDesign): Record<string, string> {
+    const { colors, typography, layout, controls, button } = design
+    return {
+        "--gmf-card-max-width": px(layout.maxWidth),
+        "--gmf-card-background": colors.cardBackground,
+        "--gmf-card-border": colors.cardBorder,
+        "--gmf-heading-rule": colors.headingRule,
+        "--gmf-card-radius": px(layout.cardRadius),
+        "--gmf-card-padding": `${px(layout.cardPaddingTop)} ${px(layout.cardPaddingRight)} ${px(layout.cardPaddingBottom)} ${px(layout.cardPaddingLeft)}`,
+        "--gmf-form-gap": px(layout.formGap),
+        "--gmf-field-gap": px(layout.fieldGap),
+        "--gmf-name-gap": px(layout.nameGap),
+        "--gmf-heading-align": layout.headingAlign,
+        "--gmf-button-align": align(layout.buttonAlign),
+        "--gmf-text": colors.text,
+        "--gmf-muted-text": colors.mutedText,
+        "--gmf-input-background": colors.inputBackground,
+        "--gmf-border": colors.border,
+        "--gmf-border-hover": colors.borderHover,
+        "--gmf-focus": colors.focus,
+        "--gmf-accent": colors.accent,
+        "--gmf-accent-hover": colors.accentHover,
+        "--gmf-accent-active": colors.accentActive,
+        "--gmf-button-text": colors.buttonText,
+        "--gmf-error": colors.error,
+        "--gmf-error-background": colors.errorBackground,
+        "--gmf-form-error-background": colors.formErrorBackground,
+        "--gmf-success": colors.success,
+        "--gmf-success-background": colors.successBackground,
+        "--gmf-success-border": colors.successBorder,
+        "--gmf-body-font": typography.bodyFontFamily,
+        "--gmf-heading-font": typography.headingFontFamily,
+        "--gmf-body-size": px(typography.bodySize),
+        "--gmf-label-size": px(typography.labelSize),
+        "--gmf-helper-size": px(typography.helperSize),
+        "--gmf-heading-size": px(typography.headingSize),
+        "--gmf-heading-weight": String(typography.headingWeight),
+        "--gmf-body-line-height": String(typography.bodyLineHeight),
+        "--gmf-heading-line-height": String(typography.headingLineHeight),
+        "--gmf-control-height": px(controls.height),
+        "--gmf-control-radius": px(controls.radius),
+        "--gmf-control-padding": px(controls.padding),
+        "--gmf-textarea-height": px(layout.textareaMinHeight),
+        "--gmf-button-min-width": px(button.minWidth),
+        "--gmf-button-height": px(button.height),
+        "--gmf-button-radius": px(button.radius),
+        "--gmf-button-padding": px(button.horizontalPadding),
+        "--gmf-button-size": px(button.fontSize),
+        "--gmf-button-weight": String(button.fontWeight),
+    }
+}
+
 // Shared form CSS. Replicates Oaken's interaction-state model (field
 // default/hover/focus/error/error-focus, error icon inside the input, button
 // normal/hover/active/focus/disabled) adapted to Gathering Matters' palette
@@ -55,22 +254,22 @@ export const GM_API_URL = "https://cms.gatheringmatters.com/gm-intake/submission
 // grid, prominent right-aligned button) with GM colors. Injected once per form
 // via a <style> tag; the `gmf-` prefix scopes it.
 export const GM_FORM_CSS = `
-.gmf-card{box-sizing:border-box;width:100%;max-width:492px;background:#FFFDF8;border-radius:12px;box-shadow:inset 0 0 0 1px #EAE6DA,0 6px 18px rgba(20,30,45,.08);padding:24px 32px 28px;font-family:inherit;color:#25313B}
-.gmf-heading{margin:0 0 16px;padding-bottom:16px;border-bottom:1.5px solid #E0E4E8;font-family:"Manrope",sans-serif;font-size:27px;line-height:1.2;font-weight:800;letter-spacing:-.015em;text-align:center;color:#25313B}
-.gmf-form{display:flex;flex-direction:column;gap:16px;width:100%;margin:0}
-.gmf-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-.gmf-field{display:flex;flex-direction:column;gap:6px;min-width:0}
-.gmf-label{font-size:14px;line-height:1.43;font-weight:600;color:#25313B}
-.gmf-optional{font-weight:400;color:#6B7280}
+.gmf-card{box-sizing:border-box;width:100%;max-width:var(--gmf-card-max-width);background:var(--gmf-card-background);border-radius:var(--gmf-card-radius);box-shadow:inset 0 0 0 1px var(--gmf-card-border),0 6px 18px rgba(20,30,45,.08);padding:var(--gmf-card-padding);font-family:var(--gmf-body-font);color:var(--gmf-text)}
+.gmf-heading{margin:0 0 16px;padding-bottom:16px;border-bottom:1.5px solid var(--gmf-heading-rule);font-family:var(--gmf-heading-font);font-size:var(--gmf-heading-size);line-height:var(--gmf-heading-line-height);font-weight:var(--gmf-heading-weight);letter-spacing:-.015em;text-align:var(--gmf-heading-align);color:var(--gmf-text)}
+.gmf-form{display:flex;flex-direction:column;gap:var(--gmf-form-gap);width:100%;margin:0}
+.gmf-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--gmf-name-gap)}
+.gmf-field{display:flex;flex-direction:column;gap:var(--gmf-field-gap);min-width:0}
+.gmf-label{font-size:var(--gmf-label-size);line-height:1.43;font-weight:600;color:var(--gmf-text)}
+.gmf-optional{font-weight:400;color:var(--gmf-muted-text)}
 .gmf-control{position:relative;display:block}
-.gmf-input,.gmf-select,.gmf-textarea{box-sizing:border-box;width:100%;padding:12px;font-size:16px;line-height:1.5;font-family:inherit;color:#25313B;background:#fff;border:0;border-radius:8px;box-shadow:inset 0 0 0 1px #D9DEE3;transition:box-shadow 160ms ease,background-color 160ms ease}
-.gmf-input{height:48px}
-.gmf-textarea{min-height:140px;resize:vertical;display:block}
+.gmf-input,.gmf-select,.gmf-textarea{box-sizing:border-box;width:100%;padding:var(--gmf-control-padding);font-size:var(--gmf-body-size);line-height:var(--gmf-body-line-height);font-family:var(--gmf-body-font);color:var(--gmf-text);background:var(--gmf-input-background);border:0;border-radius:var(--gmf-control-radius);box-shadow:inset 0 0 0 1px var(--gmf-border);transition:box-shadow 160ms ease,background-color 160ms ease}
+.gmf-input{height:var(--gmf-control-height)}
+.gmf-textarea{min-height:var(--gmf-textarea-height);resize:vertical;display:block}
 .gmf-select{height:48px;-webkit-appearance:none;-moz-appearance:none;appearance:none;padding-right:40px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%2325313B' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;background-size:12px 8px}
-.gmf-input:hover,.gmf-select:hover,.gmf-textarea:hover{box-shadow:inset 0 0 0 1px #B9C2CB}
-.gmf-input:focus,.gmf-select:focus,.gmf-textarea:focus{outline:none;box-shadow:inset 0 0 0 1px #1D1D7A,0 0 0 3px rgba(29,29,122,.18)}
-.gmf-field.gmf-has-error .gmf-input,.gmf-field.gmf-has-error .gmf-select,.gmf-field.gmf-has-error .gmf-textarea{background:#FDF4F4;box-shadow:inset 0 0 0 1px #B42318}
-.gmf-field.gmf-has-error .gmf-input:focus,.gmf-field.gmf-has-error .gmf-select:focus,.gmf-field.gmf-has-error .gmf-textarea:focus{box-shadow:inset 0 0 0 1px #B42318,0 0 0 3px rgba(180,35,24,.16)}
+.gmf-input:hover,.gmf-select:hover,.gmf-textarea:hover{box-shadow:inset 0 0 0 1px var(--gmf-border-hover)}
+.gmf-input:focus,.gmf-select:focus,.gmf-textarea:focus{outline:none;box-shadow:inset 0 0 0 1px var(--gmf-focus),0 0 0 3px rgba(29,29,122,.18)}
+.gmf-field.gmf-has-error .gmf-input,.gmf-field.gmf-has-error .gmf-select,.gmf-field.gmf-has-error .gmf-textarea{background:var(--gmf-error-background);box-shadow:inset 0 0 0 1px var(--gmf-error)}
+.gmf-field.gmf-has-error .gmf-input:focus,.gmf-field.gmf-has-error .gmf-select:focus,.gmf-field.gmf-has-error .gmf-textarea:focus{box-shadow:inset 0 0 0 1px var(--gmf-error),0 0 0 3px rgba(180,35,24,.16)}
 .gmf-error-icon{display:none;position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none}
 .gmf-field.gmf-has-error .gmf-error-icon{display:block}
 .gmf-field.gmf-has-error .gmf-input{padding-right:40px}
@@ -83,37 +282,37 @@ export const GM_FORM_CSS = `
 /* Custom accessible listbox (replaces the native <select> so the open menu
    matches the GM form; the native popup can't be styled cross-browser). */
 .gmf-select-wrap{position:relative}
-.gmf-select-btn{box-sizing:border-box;display:flex;align-items:center;width:100%;height:48px;padding:12px 40px 12px 12px;font-size:16px;line-height:1.5;font-family:inherit;color:#25313B;text-align:left;background:#fff;border:0;border-radius:8px;box-shadow:inset 0 0 0 1px #D9DEE3;cursor:pointer;transition:box-shadow 160ms ease,background-color 160ms ease}
-.gmf-select-btn:hover{box-shadow:inset 0 0 0 1px #B9C2CB}
-.gmf-select-btn:focus-visible,.gmf-select-btn:focus{outline:none;box-shadow:inset 0 0 0 1px #1D1D7A,0 0 0 3px rgba(29,29,122,.18)}
+.gmf-select-btn{box-sizing:border-box;display:flex;align-items:center;width:100%;height:var(--gmf-control-height);padding:var(--gmf-control-padding) 40px var(--gmf-control-padding) var(--gmf-control-padding);font-size:var(--gmf-body-size);line-height:var(--gmf-body-line-height);font-family:var(--gmf-body-font);color:var(--gmf-text);text-align:left;background:var(--gmf-input-background);border:0;border-radius:var(--gmf-control-radius);box-shadow:inset 0 0 0 1px var(--gmf-border);cursor:pointer;transition:box-shadow 160ms ease,background-color 160ms ease}
+.gmf-select-btn:hover{box-shadow:inset 0 0 0 1px var(--gmf-border-hover)}
+.gmf-select-btn:focus-visible,.gmf-select-btn:focus{outline:none;box-shadow:inset 0 0 0 1px var(--gmf-focus),0 0 0 3px rgba(29,29,122,.18)}
 .gmf-select-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gmf-select-placeholder{flex:1;min-width:0;color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gmf-select-placeholder{flex:1;min-width:0;color:var(--gmf-muted-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gmf-select-chevron{position:absolute;right:14px;top:50%;transform:translateY(-50%);pointer-events:none;transition:transform 160ms ease}
 .gmf-select-wrap[data-open="true"] .gmf-select-chevron{transform:translateY(-50%) rotate(180deg)}
-.gmf-field.gmf-has-error .gmf-select-btn{background:#FDF4F4;box-shadow:inset 0 0 0 1px #B42318}
-.gmf-field.gmf-has-error .gmf-select-btn:focus{box-shadow:inset 0 0 0 1px #B42318,0 0 0 3px rgba(180,35,24,.16)}
+.gmf-field.gmf-has-error .gmf-select-btn{background:var(--gmf-error-background);box-shadow:inset 0 0 0 1px var(--gmf-error)}
+.gmf-field.gmf-has-error .gmf-select-btn:focus{box-shadow:inset 0 0 0 1px var(--gmf-error),0 0 0 3px rgba(180,35,24,.16)}
 .gmf-field.gmf-has-error .gmf-select-chevron{display:none}
-.gmf-listbox{position:absolute;z-index:30;top:calc(100% + 6px);left:0;right:0;margin:0;padding:6px;list-style:none;background:#FFFDF8;border-radius:10px;box-shadow:inset 0 0 0 1px #EAE6DA,0 12px 28px rgba(20,30,45,.16);max-height:264px;overflow-y:auto}
-.gmf-option{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:6px;font-size:15px;line-height:1.3;color:#25313B;cursor:pointer;user-select:none}
+.gmf-listbox{position:absolute;z-index:30;top:calc(100% + 6px);left:0;right:0;margin:0;padding:6px;list-style:none;background:var(--gmf-card-background);border-radius:10px;box-shadow:inset 0 0 0 1px var(--gmf-card-border),0 12px 28px rgba(20,30,45,.16);max-height:264px;overflow-y:auto}
+.gmf-option{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:6px;font-size:15px;line-height:1.3;color:var(--gmf-text);cursor:pointer;user-select:none}
 .gmf-option.is-active{background:rgba(29,29,122,.10)}
 .gmf-option.is-selected{font-weight:600}
 .gmf-option.is-selected.is-active{background:rgba(29,29,122,.16)}
 .gmf-option[aria-selected="true"]::after{content:"✓";margin-left:8px;color:#1D1D7A;font-weight:700}
-.gmf-error{margin:2px 0 0;font-size:13px;line-height:1.4;font-weight:600;color:#B42318}
-.gmf-hint{margin:2px 0 0;font-size:13px;line-height:1.4;color:#5B6670}
+.gmf-error{margin:2px 0 0;font-size:var(--gmf-helper-size);line-height:1.4;font-weight:600;color:var(--gmf-error)}
+.gmf-hint{margin:2px 0 0;font-size:var(--gmf-helper-size);line-height:1.4;color:var(--gmf-muted-text)}
 .gmf-field.gmf-has-error .gmf-hint{display:none}
 .gmf-consent{display:flex;flex-direction:column;gap:6px}
 .gmf-checkbox-row{display:flex;gap:10px;align-items:flex-start}
-.gmf-checkbox-row input{margin-top:3px;flex:0 0 auto;width:16px;height:16px;accent-color:#1D1D7A}
-.gmf-checkbox-label{font-size:14px;line-height:1.45;color:#25313B}
-.gmf-button{align-self:flex-end;margin-right:8px;min-width:220px;min-height:48px;padding:12px 24px;border:0;border-radius:24px;background:#1D1D7A;color:#fff;font-family:"Manrope",sans-serif;font-size:16px;font-weight:600;line-height:1.5;cursor:pointer;transition:background-color 160ms ease,box-shadow 160ms ease}
-.gmf-button:hover{background:#17175F}
-.gmf-button:active{background:#101043}
-.gmf-button:focus-visible{outline:none;box-shadow:0 0 0 3px #FFFDF8,0 0 0 6px rgba(29,29,122,.55)}
+.gmf-checkbox-row input{margin-top:3px;flex:0 0 auto;width:16px;height:16px;accent-color:var(--gmf-accent)}
+.gmf-checkbox-label{font-size:var(--gmf-label-size);line-height:1.45;color:var(--gmf-text)}
+.gmf-button{align-self:var(--gmf-button-align);margin-right:8px;min-width:var(--gmf-button-min-width);min-height:var(--gmf-button-height);padding:12px var(--gmf-button-padding);border:0;border-radius:var(--gmf-button-radius);background:var(--gmf-accent);color:var(--gmf-button-text);font-family:var(--gmf-heading-font);font-size:var(--gmf-button-size);font-weight:var(--gmf-button-weight);line-height:1.5;cursor:pointer;transition:background-color 160ms ease,box-shadow 160ms ease}
+.gmf-button:hover{background:var(--gmf-accent-hover)}
+.gmf-button:active{background:var(--gmf-accent-active)}
+.gmf-button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--gmf-card-background),0 0 0 6px rgba(29,29,122,.55)}
 .gmf-button:disabled{opacity:.7;cursor:default}
-.gmf-form-error{margin:0;border-left:3px solid #B42318;background:rgba(180,35,24,.08);color:#7F1D1D;border-radius:6px;padding:12px 14px;font-size:14px;font-weight:600}
+.gmf-form-error{margin:0;border-left:3px solid var(--gmf-error);background:var(--gmf-form-error-background);color:var(--gmf-error);border-radius:6px;padding:12px 14px;font-size:var(--gmf-label-size);font-weight:600}
 .gmf-honeypot{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-.gmf-success{border:1px solid #CBE3D1;background:#EEF6F0;color:#1E4D2B;border-radius:8px;padding:24px;text-align:center;font-family:"Manrope",sans-serif}
+.gmf-success{border:1px solid var(--gmf-success-border);background:var(--gmf-success-background);color:var(--gmf-success);border-radius:8px;padding:24px;text-align:center;font-family:var(--gmf-heading-font)}
 @media(max-width:480px){.gmf-card{padding:20px 18px 24px}.gmf-row{grid-template-columns:1fr}.gmf-button{align-self:stretch;margin-right:0;width:100%}}
 `
 
@@ -317,6 +516,483 @@ export function classifyResponse(status: number, data: any): Outcome {
     return { kind: "server" }
 }
 // ---- end inlined helpers ----
+// ---- inlined from GmCanvasPieces.tsx (see framer/ for the shared source) ----
+
+/**
+ * Runtime-only props injected by the form controller when a canvas piece is
+ * connected through a ComponentInstance outlet. They are deliberately not
+ * exposed as Framer controls: they carry form state and event handlers, not
+ * design decisions.
+ */
+export type GmCanvasPieceRuntime =
+    | {
+          kind: "heading"
+          text: string
+      }
+    | {
+          kind: "field"
+          field: GmFieldName
+          id: string
+          label: string
+          placeholder?: string
+          autoComplete?: string
+          inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]
+          type: "text" | "email" | "tel" | "textarea" | "age" | "consent"
+          value: string | boolean
+          error?: string
+          describedBy?: string
+          inputRef?: React.RefObject<HTMLElement>
+          onTextChange?: (value: string) => void
+          onTextBlur?: (value: string) => void
+          onCheckedChange?: (value: boolean) => void
+          onAgeChange?: (value: string) => void
+      }
+    | {
+          kind: "submit"
+          submitting: boolean
+      }
+
+export interface GmCanvasPieceProps {
+    runtime?: GmCanvasPieceRuntime
+    previewLabel?: string
+    labelOverride?: string
+    placeholderOverride?: string
+    fieldDesign?: {
+        textColor?: string
+        mutedColor?: string
+        errorColor?: string
+        inputBackground?: string
+        inputBorder?: string
+        inputFocus?: string
+        inputRadius?: number
+        inputHeight?: number
+        inputPadding?: number
+        labelSize?: number
+        bodySize?: number
+        errorSize?: number
+    }
+    headingDesign?: {
+        color?: string
+        ruleColor?: string
+        fontFamily?: string
+        fontSize?: number
+        fontWeight?: number
+        lineHeight?: number
+        textAlign?: "left" | "center" | "right"
+        paddingBottom?: number
+    }
+    buttonDesign?: {
+        background?: string
+        textColor?: string
+        radius?: number
+        minWidth?: number
+        height?: number
+        fontFamily?: string
+        fontSize?: number
+        fontWeight?: number
+    }
+}
+
+export interface GmCanvasSlots {
+    heading?: React.ReactNode
+    firstName?: React.ReactNode
+    lastName?: React.ReactNode
+    email?: React.ReactNode
+    phone?: React.ReactNode
+    ageGroup?: React.ReactNode
+    title?: React.ReactNode
+    description?: React.ReactNode
+    consentReview?: React.ReactNode
+    consentContact?: React.ReactNode
+    submitButton?: React.ReactNode
+}
+
+interface PieceDesign {
+    textColor: string
+    mutedColor: string
+    errorColor: string
+    inputBackground: string
+    inputBorder: string
+    inputFocus: string
+    inputRadius: number
+    inputHeight: number
+    inputPadding: number
+    labelSize: number
+    bodySize: number
+    errorSize: number
+}
+
+const DEFAULT_PIECE_DESIGN: PieceDesign = {
+    textColor: "#243244",
+    mutedColor: "#64748B",
+    errorColor: "#B42318",
+    inputBackground: "#FFFFFF",
+    inputBorder: "#CBD5E1",
+    inputFocus: "#1D1D7A",
+    inputRadius: 8,
+    inputHeight: 48,
+    inputPadding: 14,
+    labelSize: 15,
+    bodySize: 16,
+    errorSize: 13,
+}
+
+function CanvasPieceErrorIcon() {
+    return (
+        <svg
+            className="gmf-error-icon"
+            width="21"
+            height="20"
+            viewBox="0 0 21 20"
+            fill="none"
+            aria-hidden="true"
+        >
+            <path
+                d="M18.6921 19.8286H2.30614C1.9263 19.8286 1.54646 19.7324 1.2147 19.5545C0.67139 19.2612 0.277126 18.7756 0.0992267 18.1842C-0.0786727 17.5928 -0.0161674 16.9678 0.277126 16.4293L8.46531 1.21164C8.86918 0.461577 9.6481 0 10.4991 0C11.3502 0 12.1291 0.466385 12.533 1.21164L20.7259 16.4293C20.9086 16.7658 21 17.1408 21 17.5255C21 18.1409 20.7596 18.7227 20.3221 19.1554C19.8893 19.593 19.3124 19.8286 18.6921 19.8286ZM2.30614 18.29H18.6969C18.9037 18.29 19.096 18.2082 19.2402 18.064C19.3845 17.9198 19.4662 17.7274 19.4662 17.5207C19.4662 17.3957 19.4326 17.2659 19.3749 17.1553L11.1771 1.94247C10.9799 1.57705 10.6386 1.53859 10.4991 1.53859C10.3597 1.53859 10.0183 1.57705 9.82119 1.94247L1.6282 17.1601C1.53204 17.3428 1.508 17.5495 1.5705 17.7467C1.6282 17.9438 1.53204 17.3428 1.6282 17.1601C1.53204 17.3428 1.508 17.5495 1.5705 17.7467C1.6282 17.9438 1.76283 18.1073 1.94073 18.2034C2.05131 18.2611 2.17632 18.29 2.30614 18.29Z"
+                fill="var(--gmf-error)"
+            />
+            <path
+                d="M10.498 13.6356C10.0893 13.6356 9.74792 13.3135 9.72869 12.9048L9.45463 7.03895C9.45463 7.03414 9.45463 7.02933 9.45463 7.02452V7.00048C9.44982 6.42351 9.9114 5.95232 10.4884 5.94751C10.5076 5.94751 10.5268 5.94751 10.5461 5.94751C11.123 5.97155 11.5702 6.46198 11.5413 7.03895L11.2673 12.9048C11.248 13.3135 10.9067 13.6356 10.498 13.6356Z"
+                fill="var(--gmf-error)"
+            />
+            <path
+                d="M10.4982 16.704C9.96935 16.704 9.53662 16.2713 9.53662 15.7424C9.53662 15.2135 9.96935 14.7808 10.4982 14.7808C11.0271 14.7808 11.4599 15.2135 11.4599 15.7424C11.4599 16.2713 11.0271 16.704 10.4982 16.704Z"
+                fill="var(--gmf-error)"
+            />
+        </svg>
+    )
+}
+
+function CanvasPieceChevronIcon() {
+    return (
+        <svg
+            className="gmf-select-chevron"
+            width="12"
+            height="8"
+            viewBox="0 0 12 8"
+            fill="none"
+            aria-hidden="true"
+        >
+            <path
+                d="M1 1.5L6 6.5L11 1.5"
+                stroke="var(--gmf-text)"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    )
+}
+
+function CanvasAgeSelect({ runtime }: { runtime: Extract<GmCanvasPieceRuntime, { kind: "field" }> }) {
+    const [open, setOpen] = useState(false)
+    const [activeIndex, setActiveIndex] = useState(-1)
+    const wrapRef = useRef<HTMLDivElement>(null)
+    const listRef = useRef<HTMLUListElement>(null)
+    const selectedIndex = AGE_OPTIONS.findIndex((o) => o.value === runtime.value)
+    const selectedLabel = selectedIndex >= 0 ? AGE_OPTIONS[selectedIndex].label : ""
+    const listId = `${runtime.id}-listbox`
+    const labelId = `${runtime.id}-label`
+
+    function close(focus = true) {
+        setOpen(false)
+        setActiveIndex(-1)
+        if (focus) (runtime.inputRef?.current as HTMLButtonElement | undefined)?.focus()
+    }
+    function choose(index: number) {
+        const option = AGE_OPTIONS[index]
+        if (option) runtime.onAgeChange?.(option.value)
+        close()
+    }
+    function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+        if (!open) {
+            if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+                e.preventDefault()
+                setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
+                setOpen(true)
+            }
+            return
+        }
+        if (e.key === "ArrowDown") {
+            e.preventDefault()
+            setActiveIndex((i) => Math.min(AGE_OPTIONS.length - 1, (i < 0 ? selectedIndex : i) + 1))
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault()
+            setActiveIndex((i) => Math.max(0, (i < 0 ? selectedIndex : i) - 1))
+        } else if (e.key === "Home") {
+            e.preventDefault()
+            setActiveIndex(0)
+        } else if (e.key === "End") {
+            e.preventDefault()
+            setActiveIndex(AGE_OPTIONS.length - 1)
+        } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            if (activeIndex >= 0) choose(activeIndex)
+        } else if (e.key === "Escape") {
+            e.preventDefault()
+            close()
+        } else if (e.key === "Tab") {
+            close(false)
+        } else if (e.key.length === 1 && /\S/.test(e.key)) {
+            const index = AGE_OPTIONS.findIndex((o) => o.label.toLowerCase().startsWith(e.key.toLowerCase()))
+            if (index >= 0) setActiveIndex(index)
+        }
+    }
+
+    useEffect(() => {
+        if (!open) return
+        const onPointerDown = (e: PointerEvent) => {
+            if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+                setOpen(false)
+                setActiveIndex(-1)
+            }
+        }
+        document.addEventListener("pointerdown", onPointerDown)
+        return () => document.removeEventListener("pointerdown", onPointerDown)
+    }, [open])
+
+    useEffect(() => {
+        if (open && activeIndex >= 0) {
+            ;(listRef.current?.children[activeIndex] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" })
+        }
+    }, [open, activeIndex])
+
+    return (
+        <div className="gmf-select-wrap" ref={wrapRef} data-open={open ? "true" : "false"}>
+            <button
+                type="button"
+                id={runtime.id}
+                ref={runtime.inputRef as React.RefObject<HTMLButtonElement>}
+                className="gmf-select-btn"
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={listId}
+                aria-labelledby={labelId}
+                aria-activedescendant={open && activeIndex >= 0 ? `${runtime.id}-opt-${activeIndex}` : undefined}
+                aria-invalid={Boolean(runtime.error)}
+                aria-describedby={runtime.describedBy}
+                onClick={() => (open ? close() : (setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0), setOpen(true)))}
+                onKeyDown={onKeyDown}
+            >
+                <span className={selectedLabel ? "gmf-select-value" : "gmf-select-placeholder"}>
+                    {selectedLabel || runtime.placeholder || "Select an age range"}
+                </span>
+            </button>
+            <CanvasPieceChevronIcon />
+            <CanvasPieceErrorIcon />
+            {open && (
+                <ul className="gmf-listbox" id={listId} role="listbox" ref={listRef} aria-labelledby={labelId}>
+                    {AGE_OPTIONS.map((option, index) => (
+                        <li
+                            key={option.value}
+                            id={`${runtime.id}-opt-${index}`}
+                            role="option"
+                            aria-selected={option.value === runtime.value}
+                            className={"gmf-option" + (index === activeIndex ? " is-active" : "") + (option.value === runtime.value ? " is-selected" : "")}
+                            onMouseEnter={() => setActiveIndex(index)}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => choose(index)}
+                        >
+                            <span>{option.label}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    )
+}
+
+function errorMessage(runtime: Extract<GmCanvasPieceRuntime, { kind: "field" }>) {
+    return runtime.error ? <p className="gmf-error" id={runtime.describedBy} role="alert">{runtime.error}</p> : null
+}
+
+/** A canvas-connectable, state-injected field piece. */
+export function GmCanvasField(props: GmCanvasPieceProps) {
+    const runtime = props.runtime
+    if (!runtime || runtime.kind !== "field") return <div className="gmf-field" aria-hidden="true" />
+    const invalid = Boolean(runtime.error)
+    const fieldClass = "gmf-field" + (invalid ? " gmf-has-error" : "")
+    const piece = { ...DEFAULT_PIECE_DESIGN, ...(props.fieldDesign || {}) }
+    const style = {
+        "--gmf-text": piece.textColor,
+        "--gmf-muted-text": piece.mutedColor,
+        "--gmf-error": piece.errorColor,
+        "--gmf-input-background": piece.inputBackground,
+        "--gmf-border": piece.inputBorder,
+        "--gmf-focus": piece.inputFocus,
+        "--gmf-control-radius": `${piece.inputRadius}px`,
+        "--gmf-control-height": `${piece.inputHeight}px`,
+        "--gmf-control-padding": `${piece.inputPadding}px`,
+        "--gmf-label-size": `${piece.labelSize}px`,
+        "--gmf-body-size": `${piece.bodySize}px`,
+        "--gmf-helper-size": `${piece.errorSize}px`,
+    } as React.CSSProperties
+    const autoComplete = runtime.autoComplete || ({
+        firstName: "given-name",
+        lastName: "family-name",
+        email: "email",
+        phone: "tel",
+    } as Partial<Record<GmFieldName, string>>)[runtime.field]
+
+    if (runtime.type === "consent") {
+        return (
+            <div className={fieldClass} style={style}>
+                <div className="gmf-checkbox-row">
+                    <input
+                        id={runtime.id}
+                        ref={runtime.inputRef as React.RefObject<HTMLInputElement>}
+                        type="checkbox"
+                        checked={Boolean(runtime.value)}
+                        aria-invalid={invalid}
+                        aria-describedby={runtime.describedBy}
+                        onChange={(e) => runtime.onCheckedChange?.(e.target.checked)}
+                    />
+                        <label className="gmf-checkbox-label" htmlFor={runtime.id}>{props.labelOverride || runtime.label}</label>
+                </div>
+                {errorMessage(runtime)}
+            </div>
+        )
+    }
+
+    return (
+        <div className={fieldClass} style={style}>
+            <label className="gmf-label" id={`${runtime.id}-label`} htmlFor={runtime.id}>{props.labelOverride || runtime.label}</label>
+            <div className={runtime.type === "textarea" ? "gmf-control gmf-control--textarea" : "gmf-control"}>
+                {runtime.type === "age" ? (
+                    <CanvasAgeSelect runtime={runtime} />
+                ) : runtime.type === "textarea" ? (
+                    <textarea
+                        className="gmf-textarea"
+                        id={runtime.id}
+                        ref={runtime.inputRef as React.RefObject<HTMLTextAreaElement>}
+                        value={String(runtime.value)}
+                        aria-invalid={invalid}
+                        aria-describedby={runtime.describedBy}
+                        onChange={(e) => runtime.onTextChange?.(e.target.value)}
+                    />
+                ) : (
+                    <input
+                        className="gmf-input"
+                        id={runtime.id}
+                        ref={runtime.inputRef as React.RefObject<HTMLInputElement>}
+                        type={runtime.type}
+                        inputMode={runtime.inputMode || (runtime.type === "email" ? "email" : runtime.type === "tel" ? "tel" : undefined)}
+                        autoComplete={autoComplete}
+                        value={String(runtime.value)}
+                        placeholder={props.placeholderOverride || runtime.placeholder}
+                        aria-invalid={invalid}
+                        aria-describedby={runtime.describedBy}
+                        onChange={(e) => runtime.onTextChange?.(e.target.value)}
+                        onBlur={(e) => runtime.onTextBlur?.(e.target.value)}
+                    />
+                )}
+                {runtime.type !== "age" && <CanvasPieceErrorIcon />}
+            </div>
+            {errorMessage(runtime)}
+        </div>
+    )
+}
+
+;(GmCanvasField as unknown as { __gmCanvasPiece?: string }).__gmCanvasPiece = "field"
+
+/** A canvas-connectable heading piece. The controller owns the real copy. */
+export function GmCanvasHeading(props: GmCanvasPieceProps & { text?: string }) {
+    const text = props.text || (props.runtime?.kind === "heading" ? props.runtime.text : "Gathering Matters")
+    const d = props.headingDesign || {}
+    return <h2 className="gmf-heading" style={{ color: d.color, borderBottomColor: d.ruleColor, fontFamily: d.fontFamily, fontSize: d.fontSize, fontWeight: d.fontWeight, lineHeight: d.lineHeight, textAlign: d.textAlign, paddingBottom: d.paddingBottom }}>{text}</h2>
+}
+
+;(GmCanvasHeading as unknown as { __gmCanvasPiece?: string }).__gmCanvasPiece = "heading"
+
+/** A canvas-connectable submit button. The enclosing controller owns submit behavior. */
+export function GmCanvasSubmitButton(props: GmCanvasPieceProps) {
+    const submitting = props.runtime?.kind === "submit" && props.runtime.submitting
+    const d = props.buttonDesign || {}
+    return <button type="submit" className="gmf-button" disabled={submitting} style={{ background: d.background, color: d.textColor, borderRadius: d.radius, minWidth: d.minWidth, minHeight: d.height, fontFamily: d.fontFamily, fontSize: d.fontSize, fontWeight: d.fontWeight }}>{submitting ? "Submitting…" : "Submit"}</button>
+}
+
+;(GmCanvasSubmitButton as unknown as { __gmCanvasPiece?: string }).__gmCanvasPiece = "submit"
+
+/**
+ * Named outlet renderer. Unsupported linked frames intentionally fall back to
+ * the proven controller renderer rather than silently losing form behavior.
+ */
+export function GmCanvasOutlet({
+    slot,
+    runtime,
+    fallback,
+}: {
+    slot?: React.ReactNode
+    runtime: GmCanvasPieceRuntime
+    fallback: React.ReactNode
+}) {
+    if (!React.isValidElement(slot)) return <>{fallback}</>
+    const marker = (slot.type as { __gmCanvasPiece?: string }).__gmCanvasPiece
+    const expected = runtime.kind === "field" ? "field" : runtime.kind
+    if (marker !== expected) return <>{fallback}</>
+    return React.cloneElement(slot, { runtime } as Partial<GmCanvasPieceProps>)
+}
+
+addPropertyControls(GmCanvasHeading, {
+    text: { type: ControlType.String, title: "Preview text", defaultValue: "Gathering Matters" },
+    headingDesign: {
+        type: ControlType.Object,
+        title: "Heading style",
+        controls: {
+            color: { type: ControlType.Color, defaultValue: "#243244" },
+            ruleColor: { type: ControlType.Color, defaultValue: "#E0E4E8" },
+            fontFamily: { type: ControlType.String, defaultValue: "Inter, system-ui, sans-serif" },
+            fontSize: { type: ControlType.Number, min: 18, max: 56, defaultValue: 28 },
+            fontWeight: { type: ControlType.Number, min: 400, max: 900, step: 100, defaultValue: 700 },
+            lineHeight: { type: ControlType.Number, min: 1, max: 2, step: 0.05, defaultValue: 1.2 },
+            textAlign: { type: ControlType.Enum, options: ["left", "center", "right"], defaultValue: "center" },
+            paddingBottom: { type: ControlType.Number, min: 0, max: 40, defaultValue: 16 },
+        },
+    },
+})
+
+addPropertyControls(GmCanvasField, {
+    previewLabel: { type: ControlType.String, title: "Preview label", defaultValue: "Field label" },
+    labelOverride: { type: ControlType.String, title: "Approved label copy", optional: true },
+    placeholderOverride: { type: ControlType.String, title: "Placeholder copy", optional: true },
+    fieldDesign: {
+        type: ControlType.Object,
+        title: "Field style",
+        controls: {
+            textColor: { type: ControlType.Color, defaultValue: "#243244" },
+            mutedColor: { type: ControlType.Color, defaultValue: "#64748B" },
+            errorColor: { type: ControlType.Color, defaultValue: "#B42318" },
+            inputBackground: { type: ControlType.Color, defaultValue: "#FFFFFF" },
+            inputBorder: { type: ControlType.Color, defaultValue: "#CBD5E1" },
+            inputFocus: { type: ControlType.Color, defaultValue: "#1D1D7A" },
+            inputRadius: { type: ControlType.Number, min: 0, max: 30, defaultValue: 8 },
+            inputHeight: { type: ControlType.Number, min: 36, max: 72, defaultValue: 48 },
+            inputPadding: { type: ControlType.Number, min: 4, max: 28, defaultValue: 14 },
+            labelSize: { type: ControlType.Number, min: 11, max: 20, defaultValue: 15 },
+            bodySize: { type: ControlType.Number, min: 12, max: 24, defaultValue: 16 },
+            errorSize: { type: ControlType.Number, min: 10, max: 18, defaultValue: 13 },
+        },
+    },
+})
+
+addPropertyControls(GmCanvasSubmitButton, {
+    buttonDesign: {
+        type: ControlType.Object,
+        title: "Button style",
+        controls: {
+            background: { type: ControlType.Color, defaultValue: "#1D1D7A" },
+            textColor: { type: ControlType.Color, defaultValue: "#FFFFFF" },
+            radius: { type: ControlType.Number, min: 0, max: 40, defaultValue: 8 },
+            minWidth: { type: ControlType.Number, min: 100, max: 400, defaultValue: 160 },
+            height: { type: ControlType.Number, min: 36, max: 72, defaultValue: 48 },
+            fontFamily: { type: ControlType.String, defaultValue: "Inter, system-ui, sans-serif" },
+            fontSize: { type: ControlType.Number, min: 12, max: 24, defaultValue: 16 },
+            fontWeight: { type: ControlType.Number, min: 400, max: 900, step: 100, defaultValue: 700 },
+        },
+    },
+})
+// ---- end inlined canvas pieces ----
 
 const HEADING = "Share Your Initiative"
 
@@ -332,15 +1008,15 @@ function ErrorIcon() {
         >
             <path
                 d="M18.6921 19.8286H2.30614C1.9263 19.8286 1.54646 19.7324 1.2147 19.5545C0.67139 19.2612 0.277126 18.7756 0.0992267 18.1842C-0.0786727 17.5928 -0.0161674 16.9678 0.277126 16.4293L8.46531 1.21164C8.86918 0.461577 9.6481 0 10.4991 0C11.3502 0 12.1291 0.466385 12.533 1.21164L20.7259 16.4293C20.9086 16.7658 21 17.1408 21 17.5255C21 18.1409 20.7596 18.7227 20.3221 19.1554C19.8893 19.593 19.3124 19.8286 18.6921 19.8286ZM2.30614 18.29H18.6969C18.9037 18.29 19.096 18.2082 19.2402 18.064C19.3845 17.9198 19.4662 17.7274 19.4662 17.5207C19.4662 17.3957 19.4326 17.2659 19.3749 17.1553L11.1771 1.94247C10.9799 1.57705 10.6386 1.53859 10.4991 1.53859C10.3597 1.53859 10.0183 1.57705 9.82119 1.94247L1.6282 17.1601C1.53204 17.3428 1.508 17.5495 1.5705 17.7467C1.6282 17.9438 1.76283 18.1073 1.94073 18.2034C2.05131 18.2611 2.17632 18.29 2.30614 18.29Z"
-                fill="#B42318"
+                fill="var(--gmf-error)"
             />
             <path
                 d="M10.498 13.6356C10.0893 13.6356 9.74792 13.3135 9.72869 12.9048L9.45463 7.03895C9.45463 7.03414 9.45463 7.02933 9.45463 7.02452V7.00048C9.44982 6.42351 9.9114 5.95232 10.4884 5.94751C10.5076 5.94751 10.5268 5.94751 10.5461 5.94751C11.123 5.97155 11.5702 6.46198 11.5413 7.03895L11.2673 12.9048C11.248 13.3135 10.9067 13.6356 10.498 13.6356Z"
-                fill="#B42318"
+                fill="var(--gmf-error)"
             />
             <path
                 d="M10.4982 16.704C9.96935 16.704 9.53662 16.2713 9.53662 15.7424C9.53662 15.2135 9.96935 14.7808 10.4982 14.7808C11.0271 14.7808 11.4599 15.2135 11.4599 15.7424C11.4599 16.2713 11.0271 16.704 10.4982 16.704Z"
-                fill="#B42318"
+                fill="var(--gmf-error)"
             />
         </svg>
     )
@@ -358,7 +1034,7 @@ function ChevronIcon() {
         >
             <path
                 d="M1 1.5L6 6.5L11 1.5"
-                stroke="#25313B"
+                stroke="var(--gmf-text)"
                 strokeWidth="1.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -540,11 +1216,38 @@ function GmSelect(props: GmSelectProps) {
 }
 
 interface Props {
-    apiUrl: string
+    apiUrl?: string
+    design?: GmFormDesignInput
+    canvasHeading?: React.ReactNode
+    canvasFirstName?: React.ReactNode
+    canvasLastName?: React.ReactNode
+    canvasEmail?: React.ReactNode
+    canvasPhone?: React.ReactNode
+    canvasAgeGroup?: React.ReactNode
+    canvasTitle?: React.ReactNode
+    canvasDescription?: React.ReactNode
+    canvasConsentReview?: React.ReactNode
+    canvasConsentContact?: React.ReactNode
+    canvasSubmitButton?: React.ReactNode
 }
 
 export default function YoungAdultInitiativeForm(props: Partial<Props>) {
     const apiUrl = props.apiUrl || GM_API_URL
+    const canvas: GmCanvasSlots = {
+        heading: props.canvasHeading,
+        firstName: props.canvasFirstName,
+        lastName: props.canvasLastName,
+        email: props.canvasEmail,
+        phone: props.canvasPhone,
+        ageGroup: props.canvasAgeGroup,
+        title: props.canvasTitle,
+        description: props.canvasDescription,
+        consentReview: props.canvasConsentReview,
+        consentContact: props.canvasConsentContact,
+        submitButton: props.canvasSubmitButton,
+    }
+    const design = resolveGmFormDesign(props.design)
+    const visualStyle = gmFormStyleVars(design) as React.CSSProperties
 
     const [values, setValues] = useState({
         firstName: "",
@@ -745,9 +1448,9 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
 
     if (status === "success") {
         return (
-            <div className="gmf-card">
+            <div className="gmf-card" style={visualStyle}>
                 <style>{GM_FORM_CSS}</style>
-                <h2 className="gmf-heading">{HEADING}</h2>
+                <GmCanvasOutlet slot={canvas?.heading} runtime={{ kind: "heading", text: HEADING }} fallback={<h2 className="gmf-heading">{HEADING}</h2>} />
                 <div
                     ref={successRef}
                     tabIndex={-1}
@@ -776,9 +1479,9 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         ) : null
 
     return (
-        <div className="gmf-card">
+        <div className="gmf-card" style={visualStyle}>
             <style>{GM_FORM_CSS}</style>
-            <h2 className="gmf-heading">{HEADING}</h2>
+            <GmCanvasOutlet slot={canvas?.heading} runtime={{ kind: "heading", text: HEADING }} fallback={<h2 className="gmf-heading">{HEADING}</h2>} />
 
             <form className="gmf-form" onSubmit={handleSubmit} noValidate>
                 <input
@@ -794,6 +1497,8 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                 {/* Name row — First + Last (2-col grid) */}
                 <div className="gmf-row">
                     <div className={fieldCls("firstName")}>
+                        <GmCanvasOutlet slot={canvas?.firstName} runtime={{ field: "firstName", kind: "field", id: "yai-firstName", label: "First name", type: "text", value: values.firstName, error: errors.firstName, describedBy: describedBy("firstName"), inputRef: refs.firstName, onTextChange: (v) => update("firstName", v) }} fallback={
+                            <>
                         <label className="gmf-label" htmlFor="yai-firstName">
                             First name
                         </label>
@@ -813,10 +1518,14 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                             />
                             <ErrorIcon />
                         </div>
-                        {err("firstName")}
+                                {err("firstName")}
+                            </>
+                        } />
                     </div>
 
                     <div className={fieldCls("lastName")}>
+                        <GmCanvasOutlet slot={canvas?.lastName} runtime={{ field: "lastName", kind: "field", id: "yai-lastName", label: "Last name", type: "text", value: values.lastName, error: errors.lastName, describedBy: describedBy("lastName"), inputRef: refs.lastName, onTextChange: (v) => update("lastName", v) }} fallback={
+                            <>
                         <label className="gmf-label" htmlFor="yai-lastName">
                             Last name
                         </label>
@@ -836,12 +1545,16 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                             />
                             <ErrorIcon />
                         </div>
-                        {err("lastName")}
+                                {err("lastName")}
+                            </>
+                        } />
                     </div>
                 </div>
 
                 {/* Email (required) */}
                 <div className={fieldCls("email")}>
+                    <GmCanvasOutlet slot={canvas?.email} runtime={{ field: "email", kind: "field", id: "yai-email", label: "Email address", type: "email", value: values.email, error: errors.email, describedBy: describedBy("email"), inputRef: refs.email, onTextChange: (v) => update("email", v) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="yai-email">
                         Email address
                     </label>
@@ -860,11 +1573,15 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                    {err("email")}
+                            {err("email")}
+                        </>
+                    } />
                 </div>
 
                 {/* Phone — formats as you type; US or international */}
                 <div className={fieldCls("phone")}>
+                    <GmCanvasOutlet slot={canvas?.phone} runtime={{ field: "phone", kind: "field", id: "yai-phone", label: "Phone number (optional)", type: "tel", autoComplete: "tel", inputMode: "tel", value: values.phone, error: errors.phone, describedBy: errors.phone ? "phone-error" : "yai-phone-hint", inputRef: refs.phone, onTextChange: (v) => update("phone", formatPhoneOnEdit(values.phone, v)), onTextBlur: (v) => update("phone", formatPhoneValue(v)) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="yai-phone">
                         Phone number{" "}
                         <span className="gmf-optional">(optional)</span>
@@ -901,11 +1618,15 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                         Include your country code for international numbers (e.g.
                         +44…).
                     </p>
-                    {err("phone")}
+                            {err("phone")}
+                        </>
+                    } />
                 </div>
 
                 {/* Age (submitter's own age) — accessible custom listbox */}
                 <div className={fieldCls("ageGroup")}>
+                    <GmCanvasOutlet slot={canvas?.ageGroup} runtime={{ field: "ageGroup", kind: "field", id: "yai-ageGroup", label: "Your age range", placeholder: "Select an age range", type: "age", value: values.ageGroup, error: errors.ageGroup, describedBy: describedBy("ageGroup"), inputRef: refs.ageGroup, onAgeChange: (v) => update("ageGroup", v) }} fallback={
+                        <>
                     <label
                         className="gmf-label"
                         id="yai-ageGroup-label"
@@ -923,11 +1644,15 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                         buttonRef={refs.ageGroup}
                         onSelect={(v) => update("ageGroup", v)}
                     />
-                    {err("ageGroup")}
+                            {err("ageGroup")}
+                        </>
+                    } />
                 </div>
 
                 {/* Title */}
                 <div className={fieldCls("title")}>
+                    <GmCanvasOutlet slot={canvas?.title} runtime={{ field: "title", kind: "field", id: "yai-title", label: "Idea title", type: "text", value: values.title, error: errors.title, describedBy: describedBy("title"), inputRef: refs.title, onTextChange: (v) => update("title", v) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="yai-title">
                         Initiative title
                     </label>
@@ -944,11 +1669,15 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                    {err("title")}
+                            {err("title")}
+                        </>
+                    } />
                 </div>
 
                 {/* Description */}
                 <div className={fieldCls("description")}>
+                    <GmCanvasOutlet slot={canvas?.description} runtime={{ field: "description", kind: "field", id: "yai-description", label: "Description", type: "textarea", value: values.description, error: errors.description, describedBy: describedBy("description"), inputRef: refs.description, onTextChange: (v) => update("description", v) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="yai-description">
                         Initiative description
                     </label>
@@ -966,11 +1695,15 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                    {err("description")}
+                            {err("description")}
+                        </>
+                    } />
                 </div>
 
                 {/* Review consent (required) */}
                 <div className={fieldCls("consentReview")}>
+                    <GmCanvasOutlet slot={canvas?.consentReview} runtime={{ field: "consentReview", kind: "field", id: "yai-consentReview", label: "I agree that my submission may be reviewed by the Gathering Matters team.", type: "consent", value: values.consentReview, error: errors.consentReview, describedBy: describedBy("consentReview"), inputRef: refs.consentReview, onCheckedChange: (v) => update("consentReview", v) }} fallback={
+                        <>
                     <div className="gmf-checkbox-row">
                         <input
                             id="yai-consentReview"
@@ -991,11 +1724,15 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                             Gathering Matters team.
                         </label>
                     </div>
-                    {err("consentReview")}
+                            {err("consentReview")}
+                        </>
+                    } />
                 </div>
 
                 {/* Contact consent (required for YAI) */}
                 <div className={fieldCls("consentContact")}>
+                    <GmCanvasOutlet slot={canvas?.consentContact} runtime={{ field: "consentContact", kind: "field", id: "yai-consentContact", label: "The Gathering Matters team may contact me to follow up about this submission.", type: "consent", value: values.consentContact, error: errors.consentContact, describedBy: describedBy("consentContact"), inputRef: refs.consentContact, onCheckedChange: (v) => update("consentContact", v) }} fallback={
+                        <>
                     <div className="gmf-checkbox-row">
                         <input
                             id="yai-consentContact"
@@ -1017,7 +1754,9 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                             conversation is part of the Young Adult Initiative.
                         </label>
                     </div>
-                    {err("consentContact")}
+                            {err("consentContact")}
+                        </>
+                    } />
                 </div>
 
                 {formError && (
@@ -1030,7 +1769,7 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                     </p>
                 )}
 
-                <button
+                {!canvas?.submitButton && <button
                     type="submit"
                     className="gmf-button"
                     disabled={status === "submitting"}
@@ -1038,9 +1777,108 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                     {status === "submitting"
                         ? "Submitting…"
                         : "Submit initiative"}
-                </button>
+                </button>}
+                <GmCanvasOutlet slot={canvas?.submitButton} runtime={{ kind: "submit", submitting: status === "submitting" }} fallback={null} />
             </form>
         </div>
     )
 }
 
+addPropertyControls(YoungAdultInitiativeForm, {
+    canvasHeading: { type: ControlType.ComponentInstance, title: "Canvas heading" },
+    canvasFirstName: { type: ControlType.ComponentInstance, title: "Canvas first name" },
+    canvasLastName: { type: ControlType.ComponentInstance, title: "Canvas last name" },
+    canvasEmail: { type: ControlType.ComponentInstance, title: "Canvas email" },
+    canvasPhone: { type: ControlType.ComponentInstance, title: "Canvas phone" },
+    canvasAgeGroup: { type: ControlType.ComponentInstance, title: "Canvas age range" },
+    canvasTitle: { type: ControlType.ComponentInstance, title: "Canvas idea title" },
+    canvasDescription: { type: ControlType.ComponentInstance, title: "Canvas description" },
+    canvasConsentReview: { type: ControlType.ComponentInstance, title: "Canvas review consent" },
+    canvasConsentContact: { type: ControlType.ComponentInstance, title: "Canvas contact consent" },
+    canvasSubmitButton: { type: ControlType.ComponentInstance, title: "Canvas submit button" },
+    design: {
+        type: ControlType.Object,
+        title: "Design",
+        controls: {
+            colors: {
+                type: ControlType.Object,
+                title: "Colors",
+                controls: {
+                    cardBackground: { type: ControlType.Color, title: "Card", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.cardBackground },
+                    cardBorder: { type: ControlType.Color, title: "Card border", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.cardBorder },
+                    headingRule: { type: ControlType.Color, title: "Heading rule", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.headingRule },
+                    inputBackground: { type: ControlType.Color, title: "Input surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.inputBackground },
+                    text: { type: ControlType.Color, title: "Text", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.text },
+                    mutedText: { type: ControlType.Color, title: "Muted text", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.mutedText },
+                    border: { type: ControlType.Color, title: "Input border", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.border },
+                    borderHover: { type: ControlType.Color, title: "Border hover", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.borderHover },
+                    focus: { type: ControlType.Color, title: "Focus ring", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.focus },
+                    accent: { type: ControlType.Color, title: "Accent", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.accent },
+                    accentHover: { type: ControlType.Color, title: "Accent hover", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.accentHover },
+                    accentActive: { type: ControlType.Color, title: "Accent active", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.accentActive },
+                    buttonText: { type: ControlType.Color, title: "Button text", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.buttonText },
+                    error: { type: ControlType.Color, title: "Error", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.error },
+                    errorBackground: { type: ControlType.Color, title: "Error surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.errorBackground },
+                    formErrorBackground: { type: ControlType.Color, title: "Form error surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.formErrorBackground },
+                    success: { type: ControlType.Color, title: "Success", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.success },
+                    successBackground: { type: ControlType.Color, title: "Success surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.successBackground },
+                    successBorder: { type: ControlType.Color, title: "Success border", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.successBorder },
+                },
+            },
+            typography: {
+                type: ControlType.Object,
+                title: "Typography",
+                controls: {
+                    bodyFontFamily: { type: ControlType.String, title: "Body font", defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.bodyFontFamily },
+                    headingFontFamily: { type: ControlType.String, title: "Heading font", defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingFontFamily },
+                    bodySize: { type: ControlType.Number, title: "Body size", min: 12, max: 24, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.bodySize },
+                    labelSize: { type: ControlType.Number, title: "Label size", min: 11, max: 20, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.labelSize },
+                    helperSize: { type: ControlType.Number, title: "Helper/error size", min: 10, max: 18, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.helperSize },
+                    headingSize: { type: ControlType.Number, title: "Heading size", min: 18, max: 48, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingSize },
+                    headingWeight: { type: ControlType.Number, title: "Heading weight", min: 400, max: 900, step: 100, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingWeight },
+                    bodyLineHeight: { type: ControlType.Number, title: "Body line height", min: 1, max: 2, step: 0.05, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.bodyLineHeight },
+                    headingLineHeight: { type: ControlType.Number, title: "Heading line height", min: 1, max: 2, step: 0.05, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingLineHeight },
+                },
+            },
+            layout: {
+                type: ControlType.Object,
+                title: "Layout",
+                controls: {
+                    maxWidth: { type: ControlType.Number, title: "Max width", min: 280, max: 900, step: 4, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.maxWidth },
+                    cardRadius: { type: ControlType.Number, title: "Card radius", min: 0, max: 40, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardRadius },
+                    cardPaddingTop: { type: ControlType.Number, title: "Card padding top", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingTop },
+                    cardPaddingRight: { type: ControlType.Number, title: "Card padding right", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingRight },
+                    cardPaddingBottom: { type: ControlType.Number, title: "Card padding bottom", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingBottom },
+                    cardPaddingLeft: { type: ControlType.Number, title: "Card padding left", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingLeft },
+                    formGap: { type: ControlType.Number, title: "Form gap", min: 4, max: 40, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.formGap },
+                    fieldGap: { type: ControlType.Number, title: "Label gap", min: 0, max: 20, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.fieldGap },
+                    nameGap: { type: ControlType.Number, title: "Name column gap", min: 4, max: 40, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.nameGap },
+                    textareaMinHeight: { type: ControlType.Number, title: "Description height", min: 80, max: 360, step: 10, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.textareaMinHeight },
+                    headingAlign: { type: ControlType.Enum, title: "Heading align", options: ["left", "center", "right"], optionTitles: ["Left", "Center", "Right"], defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.headingAlign },
+                    buttonAlign: { type: ControlType.Enum, title: "Button align", options: ["left", "center", "right"], optionTitles: ["Left", "Center", "Right"], defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.buttonAlign },
+                },
+            },
+            controls: {
+                type: ControlType.Object,
+                title: "Inputs",
+                controls: {
+                    height: { type: ControlType.Number, title: "Input height", min: 36, max: 72, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.controls.height },
+                    radius: { type: ControlType.Number, title: "Input radius", min: 0, max: 30, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.controls.radius },
+                    padding: { type: ControlType.Number, title: "Input padding", min: 4, max: 28, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.controls.padding },
+                },
+            },
+            button: {
+                type: ControlType.Object,
+                title: "Button",
+                controls: {
+                    minWidth: { type: ControlType.Number, title: "Minimum width", min: 100, max: 400, step: 4, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.minWidth },
+                    height: { type: ControlType.Number, title: "Minimum height", min: 36, max: 72, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.height },
+                    radius: { type: ControlType.Number, title: "Radius", min: 0, max: 40, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.radius },
+                    horizontalPadding: { type: ControlType.Number, title: "Horizontal padding", min: 8, max: 48, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.horizontalPadding },
+                    fontSize: { type: ControlType.Number, title: "Text size", min: 12, max: 24, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.fontSize },
+                    fontWeight: { type: ControlType.Number, title: "Text weight", min: 400, max: 900, step: 100, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.fontWeight },
+                },
+            },
+        },
+    },
+})

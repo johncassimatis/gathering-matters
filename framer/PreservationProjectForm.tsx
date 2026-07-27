@@ -25,6 +25,10 @@ import { addPropertyControls, ControlType } from "framer"
 import {
     GM_API_URL,
     GM_FORM_CSS,
+    GM_FORM_DESIGN_DEFAULTS,
+    GmFormDesignInput,
+    gmFormStyleVars,
+    resolveGmFormDesign,
     AGE_OPTIONS,
     MESSAGES,
     isBlank,
@@ -37,6 +41,10 @@ import {
     classifyResponse,
     GmFieldName,
 } from "./gmFormValidation"
+import {
+    GmCanvasOutlet,
+    GmCanvasSlots,
+} from "./GmCanvasPieces"
 
 const HEADING = "Share a Gathering Idea"
 
@@ -52,15 +60,15 @@ function ErrorIcon() {
         >
             <path
                 d="M18.6921 19.8286H2.30614C1.9263 19.8286 1.54646 19.7324 1.2147 19.5545C0.67139 19.2612 0.277126 18.7756 0.0992267 18.1842C-0.0786727 17.5928 -0.0161674 16.9678 0.277126 16.4293L8.46531 1.21164C8.86918 0.461577 9.6481 0 10.4991 0C11.3502 0 12.1291 0.466385 12.533 1.21164L20.7259 16.4293C20.9086 16.7658 21 17.1408 21 17.5255C21 18.1409 20.7596 18.7227 20.3221 19.1554C19.8893 19.593 19.3124 19.8286 18.6921 19.8286ZM2.30614 18.29H18.6969C18.9037 18.29 19.096 18.2082 19.2402 18.064C19.3845 17.9198 19.4662 17.7274 19.4662 17.5207C19.4662 17.3957 19.4326 17.2659 19.3749 17.1553L11.1771 1.94247C10.9799 1.57705 10.6386 1.53859 10.4991 1.53859C10.3597 1.53859 10.0183 1.57705 9.82119 1.94247L1.6282 17.1601C1.53204 17.3428 1.508 17.5495 1.5705 17.7467C1.6282 17.9438 1.76283 18.1073 1.94073 18.2034C2.05131 18.2611 2.17632 18.29 2.30614 18.29Z"
-                fill="#B42318"
+                fill="var(--gmf-error)"
             />
             <path
                 d="M10.498 13.6356C10.0893 13.6356 9.74792 13.3135 9.72869 12.9048L9.45463 7.03895C9.45463 7.03414 9.45463 7.02933 9.45463 7.02452V7.00048C9.44982 6.42351 9.9114 5.95232 10.4884 5.94751C10.5076 5.94751 10.5268 5.94751 10.5461 5.94751C11.123 5.97155 11.5702 6.46198 11.5413 7.03895L11.2673 12.9048C11.248 13.3135 10.9067 13.6356 10.498 13.6356Z"
-                fill="#B42318"
+                fill="var(--gmf-error)"
             />
             <path
                 d="M10.4982 16.704C9.96935 16.704 9.53662 16.2713 9.53662 15.7424C9.53662 15.2135 9.96935 14.7808 10.4982 14.7808C11.0271 14.7808 11.4599 15.2135 11.4599 15.7424C11.4599 16.2713 11.0271 16.704 10.4982 16.704Z"
-                fill="#B42318"
+                fill="var(--gmf-error)"
             />
         </svg>
     )
@@ -78,7 +86,7 @@ function ChevronIcon() {
         >
             <path
                 d="M1 1.5L6 6.5L11 1.5"
-                stroke="#25313B"
+                stroke="var(--gmf-text)"
                 strokeWidth="1.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -260,11 +268,38 @@ function GmSelect(props: GmSelectProps) {
 }
 
 interface Props {
-    apiUrl: string
+    apiUrl?: string
+    design?: GmFormDesignInput
+    canvasHeading?: React.ReactNode
+    canvasFirstName?: React.ReactNode
+    canvasLastName?: React.ReactNode
+    canvasEmail?: React.ReactNode
+    canvasPhone?: React.ReactNode
+    canvasAgeGroup?: React.ReactNode
+    canvasTitle?: React.ReactNode
+    canvasDescription?: React.ReactNode
+    canvasConsentReview?: React.ReactNode
+    canvasConsentContact?: React.ReactNode
+    canvasSubmitButton?: React.ReactNode
 }
 
 export default function PreservationProjectForm(props: Partial<Props>) {
     const apiUrl = props.apiUrl || GM_API_URL
+    const canvas: GmCanvasSlots = {
+        heading: props.canvasHeading,
+        firstName: props.canvasFirstName,
+        lastName: props.canvasLastName,
+        email: props.canvasEmail,
+        phone: props.canvasPhone,
+        ageGroup: props.canvasAgeGroup,
+        title: props.canvasTitle,
+        description: props.canvasDescription,
+        consentReview: props.canvasConsentReview,
+        consentContact: props.canvasConsentContact,
+        submitButton: props.canvasSubmitButton,
+    }
+    const design = resolveGmFormDesign(props.design)
+    const visualStyle = gmFormStyleVars(design) as React.CSSProperties
 
     const [values, setValues] = useState({
         firstName: "",
@@ -461,9 +496,13 @@ export default function PreservationProjectForm(props: Partial<Props>) {
 
     if (status === "success") {
         return (
-            <div className="gmf-card">
+            <div className="gmf-card" style={visualStyle}>
                 <style>{GM_FORM_CSS}</style>
-                <h2 className="gmf-heading">{HEADING}</h2>
+                <GmCanvasOutlet
+                    slot={canvas?.heading}
+                    runtime={{ kind: "heading", text: HEADING }}
+                    fallback={<h2 className="gmf-heading">{HEADING}</h2>}
+                />
                 <div
                     ref={successRef}
                     tabIndex={-1}
@@ -491,9 +530,13 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         ) : null
 
     return (
-        <div className="gmf-card">
+        <div className="gmf-card" style={visualStyle}>
             <style>{GM_FORM_CSS}</style>
-            <h2 className="gmf-heading">{HEADING}</h2>
+            <GmCanvasOutlet
+                slot={canvas?.heading}
+                runtime={{ kind: "heading", text: HEADING }}
+                fallback={<h2 className="gmf-heading">{HEADING}</h2>}
+            />
 
             <form className="gmf-form" onSubmit={handleSubmit} noValidate>
                 {/* Honeypot — off-screen, off the tab order, not required. */}
@@ -510,6 +553,11 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                 {/* Name row — First + Last (2-col grid, Oaken layout) */}
                 <div className="gmf-row">
                     <div className={fieldCls("firstName")}>
+                        <GmCanvasOutlet
+                            slot={canvas?.firstName}
+                            runtime={{ field: "firstName", kind: "field", id: "lp-firstName", label: "First name", type: "text", value: values.firstName, error: errors.firstName, describedBy: describedBy("firstName"), inputRef: refs.firstName, onTextChange: (v) => update("firstName", v) }}
+                            fallback={
+                                <>
                         <label className="gmf-label" htmlFor="lp-firstName">
                             First name
                         </label>
@@ -529,10 +577,18 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             />
                             <ErrorIcon />
                         </div>
-                        {err("firstName")}
+                                    {err("firstName")}
+                                </>
+                            }
+                        />
                     </div>
 
                     <div className={fieldCls("lastName")}>
+                        <GmCanvasOutlet
+                            slot={canvas?.lastName}
+                            runtime={{ field: "lastName", kind: "field", id: "lp-lastName", label: "Last name", type: "text", value: values.lastName, error: errors.lastName, describedBy: describedBy("lastName"), inputRef: refs.lastName, onTextChange: (v) => update("lastName", v) }}
+                            fallback={
+                                <>
                         <label className="gmf-label" htmlFor="lp-lastName">
                             Last name
                         </label>
@@ -552,12 +608,17 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             />
                             <ErrorIcon />
                         </div>
-                        {err("lastName")}
+                                    {err("lastName")}
+                                </>
+                            }
+                        />
                     </div>
                 </div>
 
                 {/* Email */}
                 <div className={fieldCls("email")}>
+                    <GmCanvasOutlet slot={canvas?.email} runtime={{ field: "email", kind: "field", id: "lp-email", label: "Email address — used to administer your submission", type: "email", value: values.email, error: errors.email, describedBy: describedBy("email"), inputRef: refs.email, onTextChange: (v) => update("email", v) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="lp-email">
                         Email address
                         <span className="gmf-optional">
@@ -580,11 +641,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                    {err("email")}
+                            {err("email")}
+                        </>
+                    } />
                 </div>
 
                 {/* Phone — formats as you type; US or international */}
                 <div className={fieldCls("phone")}>
+                    <GmCanvasOutlet slot={canvas?.phone} runtime={{ field: "phone", kind: "field", id: "lp-phone", label: "Phone number (optional)", type: "tel", autoComplete: "tel", inputMode: "tel", value: values.phone, error: errors.phone, describedBy: errors.phone ? "phone-error" : "lp-phone-hint", inputRef: refs.phone, onTextChange: (v) => update("phone", formatPhoneOnEdit(values.phone, v)), onTextBlur: (v) => update("phone", formatPhoneValue(v)) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="lp-phone">
                         Phone number{" "}
                         <span className="gmf-optional">(optional)</span>
@@ -621,11 +686,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         Include your country code for international numbers (e.g.
                         +44…).
                     </p>
-                    {err("phone")}
+                            {err("phone")}
+                        </>
+                    } />
                 </div>
 
                 {/* Age (submitter's own age) — accessible custom listbox */}
                 <div className={fieldCls("ageGroup")}>
+                    <GmCanvasOutlet slot={canvas?.ageGroup} runtime={{ field: "ageGroup", kind: "field", id: "lp-ageGroup", label: "Your age range", placeholder: "Select an age range", type: "age", value: values.ageGroup, error: errors.ageGroup, describedBy: describedBy("ageGroup"), inputRef: refs.ageGroup, onAgeChange: (v) => update("ageGroup", v) }} fallback={
+                        <>
                     <label
                         className="gmf-label"
                         id="lp-ageGroup-label"
@@ -643,11 +712,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         buttonRef={refs.ageGroup}
                         onSelect={(v) => update("ageGroup", v)}
                     />
-                    {err("ageGroup")}
+                            {err("ageGroup")}
+                        </>
+                    } />
                 </div>
 
                 {/* Title */}
                 <div className={fieldCls("title")}>
+                    <GmCanvasOutlet slot={canvas?.title} runtime={{ field: "title", kind: "field", id: "lp-title", label: "Gathering idea title", type: "text", value: values.title, error: errors.title, describedBy: describedBy("title"), inputRef: refs.title, onTextChange: (v) => update("title", v) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="lp-title">
                         Gathering idea title
                     </label>
@@ -664,11 +737,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                    {err("title")}
+                            {err("title")}
+                        </>
+                    } />
                 </div>
 
                 {/* Description */}
                 <div className={fieldCls("description")}>
+                    <GmCanvasOutlet slot={canvas?.description} runtime={{ field: "description", kind: "field", id: "lp-description", label: "Description", type: "textarea", value: values.description, error: errors.description, describedBy: describedBy("description"), inputRef: refs.description, onTextChange: (v) => update("description", v) }} fallback={
+                        <>
                     <label className="gmf-label" htmlFor="lp-description">
                         Description
                     </label>
@@ -686,11 +763,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                    {err("description")}
+                            {err("description")}
+                        </>
+                    } />
                 </div>
 
                 {/* Review consent (required) */}
                 <div className={fieldCls("consentReview")}>
+                    <GmCanvasOutlet slot={canvas?.consentReview} runtime={{ field: "consentReview", kind: "field", id: "lp-consentReview", label: "I agree that my submission may be reviewed by the Gathering Matters team.", type: "consent", value: values.consentReview, error: errors.consentReview, describedBy: describedBy("consentReview"), inputRef: refs.consentReview, onCheckedChange: (v) => update("consentReview", v) }} fallback={
+                        <>
                     <div className="gmf-checkbox-row">
                         <input
                             id="lp-consentReview"
@@ -711,11 +792,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             Gathering Matters team.
                         </label>
                     </div>
-                    {err("consentReview")}
+                            {err("consentReview")}
+                        </>
+                    } />
                 </div>
 
                 {/* Contact consent (optional for LP) */}
                 <div className={fieldCls("consentContact")}>
+                    <GmCanvasOutlet slot={canvas?.consentContact} runtime={{ field: "consentContact", kind: "field", id: "lp-consentContact", label: "Optional: the Gathering Matters team may contact me to follow up about this submission. (Your email is used to administer the submission either way.)", type: "consent", value: values.consentContact, error: errors.consentContact, describedBy: describedBy("consentContact"), inputRef: refs.consentContact, onCheckedChange: (v) => update("consentContact", v) }} fallback={
+                        <>
                     <div className="gmf-checkbox-row">
                         <input
                             id="lp-consentContact"
@@ -737,7 +822,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             used to administer the submission either way.)
                         </label>
                     </div>
-                    {err("consentContact")}
+                            {err("consentContact")}
+                        </>
+                    } />
                 </div>
 
                 {formError && (
@@ -750,22 +837,114 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     </p>
                 )}
 
-                <button
+                {!canvas?.submitButton && <button
                     type="submit"
                     className="gmf-button"
                     disabled={status === "submitting"}
                 >
                     {status === "submitting" ? "Submitting…" : "Submit idea"}
-                </button>
+                </button>}
+                <GmCanvasOutlet slot={canvas?.submitButton} runtime={{ kind: "submit", submitting: status === "submitting" }} fallback={null} />
             </form>
         </div>
     )
 }
 
 addPropertyControls(PreservationProjectForm, {
-    apiUrl: {
-        type: ControlType.String,
-        title: "API URL",
-        defaultValue: GM_API_URL,
+    canvasHeading: { type: ControlType.ComponentInstance, title: "Canvas heading" },
+    canvasFirstName: { type: ControlType.ComponentInstance, title: "Canvas first name" },
+    canvasLastName: { type: ControlType.ComponentInstance, title: "Canvas last name" },
+    canvasEmail: { type: ControlType.ComponentInstance, title: "Canvas email" },
+    canvasPhone: { type: ControlType.ComponentInstance, title: "Canvas phone" },
+    canvasAgeGroup: { type: ControlType.ComponentInstance, title: "Canvas age range" },
+    canvasTitle: { type: ControlType.ComponentInstance, title: "Canvas idea title" },
+    canvasDescription: { type: ControlType.ComponentInstance, title: "Canvas description" },
+    canvasConsentReview: { type: ControlType.ComponentInstance, title: "Canvas review consent" },
+    canvasConsentContact: { type: ControlType.ComponentInstance, title: "Canvas contact consent" },
+    canvasSubmitButton: { type: ControlType.ComponentInstance, title: "Canvas submit button" },
+    design: {
+        type: ControlType.Object,
+        title: "Design",
+        controls: {
+            colors: {
+                type: ControlType.Object,
+                title: "Colors",
+                controls: {
+                    cardBackground: { type: ControlType.Color, title: "Card", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.cardBackground },
+                    cardBorder: { type: ControlType.Color, title: "Card border", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.cardBorder },
+                    headingRule: { type: ControlType.Color, title: "Heading rule", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.headingRule },
+                    inputBackground: { type: ControlType.Color, title: "Input surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.inputBackground },
+                    text: { type: ControlType.Color, title: "Text", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.text },
+                    mutedText: { type: ControlType.Color, title: "Muted text", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.mutedText },
+                    border: { type: ControlType.Color, title: "Input border", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.border },
+                    borderHover: { type: ControlType.Color, title: "Border hover", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.borderHover },
+                    focus: { type: ControlType.Color, title: "Focus ring", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.focus },
+                    accent: { type: ControlType.Color, title: "Accent", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.accent },
+                    accentHover: { type: ControlType.Color, title: "Accent hover", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.accentHover },
+                    accentActive: { type: ControlType.Color, title: "Accent active", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.accentActive },
+                    buttonText: { type: ControlType.Color, title: "Button text", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.buttonText },
+                    error: { type: ControlType.Color, title: "Error", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.error },
+                    errorBackground: { type: ControlType.Color, title: "Error surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.errorBackground },
+                    formErrorBackground: { type: ControlType.Color, title: "Form error surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.formErrorBackground },
+                    success: { type: ControlType.Color, title: "Success", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.success },
+                    successBackground: { type: ControlType.Color, title: "Success surface", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.successBackground },
+                    successBorder: { type: ControlType.Color, title: "Success border", defaultValue: GM_FORM_DESIGN_DEFAULTS.colors.successBorder },
+                },
+            },
+            typography: {
+                type: ControlType.Object,
+                title: "Typography",
+                controls: {
+                    bodyFontFamily: { type: ControlType.String, title: "Body font", defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.bodyFontFamily },
+                    headingFontFamily: { type: ControlType.String, title: "Heading font", defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingFontFamily },
+                    bodySize: { type: ControlType.Number, title: "Body size", min: 12, max: 24, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.bodySize },
+                    labelSize: { type: ControlType.Number, title: "Label size", min: 11, max: 20, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.labelSize },
+                    helperSize: { type: ControlType.Number, title: "Helper/error size", min: 10, max: 18, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.helperSize },
+                    headingSize: { type: ControlType.Number, title: "Heading size", min: 18, max: 48, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingSize },
+                    headingWeight: { type: ControlType.Number, title: "Heading weight", min: 400, max: 900, step: 100, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingWeight },
+                    bodyLineHeight: { type: ControlType.Number, title: "Body line height", min: 1, max: 2, step: 0.05, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.bodyLineHeight },
+                    headingLineHeight: { type: ControlType.Number, title: "Heading line height", min: 1, max: 2, step: 0.05, defaultValue: GM_FORM_DESIGN_DEFAULTS.typography.headingLineHeight },
+                },
+            },
+            layout: {
+                type: ControlType.Object,
+                title: "Layout",
+                controls: {
+                    maxWidth: { type: ControlType.Number, title: "Max width", min: 280, max: 900, step: 4, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.maxWidth },
+                    cardRadius: { type: ControlType.Number, title: "Card radius", min: 0, max: 40, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardRadius },
+                    cardPaddingTop: { type: ControlType.Number, title: "Card padding top", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingTop },
+                    cardPaddingRight: { type: ControlType.Number, title: "Card padding right", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingRight },
+                    cardPaddingBottom: { type: ControlType.Number, title: "Card padding bottom", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingBottom },
+                    cardPaddingLeft: { type: ControlType.Number, title: "Card padding left", min: 0, max: 80, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.cardPaddingLeft },
+                    formGap: { type: ControlType.Number, title: "Form gap", min: 4, max: 40, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.formGap },
+                    fieldGap: { type: ControlType.Number, title: "Label gap", min: 0, max: 20, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.fieldGap },
+                    nameGap: { type: ControlType.Number, title: "Name column gap", min: 4, max: 40, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.nameGap },
+                    textareaMinHeight: { type: ControlType.Number, title: "Description height", min: 80, max: 360, step: 10, defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.textareaMinHeight },
+                    headingAlign: { type: ControlType.Enum, title: "Heading align", options: ["left", "center", "right"], optionTitles: ["Left", "Center", "Right"], defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.headingAlign },
+                    buttonAlign: { type: ControlType.Enum, title: "Button align", options: ["left", "center", "right"], optionTitles: ["Left", "Center", "Right"], defaultValue: GM_FORM_DESIGN_DEFAULTS.layout.buttonAlign },
+                },
+            },
+            controls: {
+                type: ControlType.Object,
+                title: "Inputs",
+                controls: {
+                    height: { type: ControlType.Number, title: "Input height", min: 36, max: 72, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.controls.height },
+                    radius: { type: ControlType.Number, title: "Input radius", min: 0, max: 30, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.controls.radius },
+                    padding: { type: ControlType.Number, title: "Input padding", min: 4, max: 28, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.controls.padding },
+                },
+            },
+            button: {
+                type: ControlType.Object,
+                title: "Button",
+                controls: {
+                    minWidth: { type: ControlType.Number, title: "Minimum width", min: 100, max: 400, step: 4, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.minWidth },
+                    height: { type: ControlType.Number, title: "Minimum height", min: 36, max: 72, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.height },
+                    radius: { type: ControlType.Number, title: "Radius", min: 0, max: 40, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.radius },
+                    horizontalPadding: { type: ControlType.Number, title: "Horizontal padding", min: 8, max: 48, step: 2, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.horizontalPadding },
+                    fontSize: { type: ControlType.Number, title: "Text size", min: 12, max: 24, step: 1, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.fontSize },
+                    fontWeight: { type: ControlType.Number, title: "Text weight", min: 400, max: 900, step: 100, defaultValue: GM_FORM_DESIGN_DEFAULTS.button.fontWeight },
+                },
+            },
+        },
     },
 })

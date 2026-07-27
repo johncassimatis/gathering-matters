@@ -20,6 +20,14 @@ const { connect, isComponentInstanceNode } = await import(pathToFileURL(framerAp
 
 const TARGETS = [
   {
+    // Canvas piece library: exports GmCanvasField / GmCanvasHeading /
+    // GmCanvasSubmitButton for designers to connect to the controller outlets.
+    // Code-only (no page). Deploy this FIRST so the pieces exist to connect.
+    codeName: "GmCanvasPieces.tsx",
+    file: "GmCanvasPieces.inlined.tsx",
+    slug: null,
+  },
+  {
     codeName: "PreservationProjectFormTest.tsx",
     file: "PreservationProjectForm.inlined.tsx",
     slug: "/listening-program-form-test",
@@ -51,14 +59,6 @@ for (const t of TARGETS) {
   const code = fs.readFileSync(path.join(here, t.file), "utf8")
 
   // 1) create or update the code file (idempotent by name)
-  let cf = existingFiles.find((f) => f.name === t.codeName)
-  if (cf) {
-    cf = await cf.setFileContent(code)
-    console.log(`code file updated: ${t.codeName} (${cf.id})`)
-  } else {
-    cf = await framer.createCodeFile(t.codeName, code)
-    console.log(`code file created: ${t.codeName} (${cf.id})`)
-  }
 
   // 2) typecheck — abort this target if there are errors
   const diags = await framer.typecheckCode(t.codeName, code)
@@ -74,7 +74,17 @@ for (const t of TARGETS) {
     continue
   }
 
-  // 3) component export insertURL
+  // 3) create or update the code file with its full designer-facing controls
+  let cf = existingFiles.find((f) => f.name === t.codeName)
+  if (cf) {
+    cf = await cf.setFileContent(code)
+    console.log(`code file updated: ${t.codeName} (${cf.id})`)
+  } else {
+    cf = await framer.createCodeFile(t.codeName, code)
+    console.log(`code file created: ${t.codeName} (${cf.id})`)
+  }
+
+  // 4) component export insertURL
   const exp = cf.exports.find((e) => e.type === "component" && e.isDefaultExport)
     || cf.exports.find((e) => e.type === "component")
   if (!exp || !exp.insertURL) {
@@ -82,7 +92,13 @@ for (const t of TARGETS) {
     continue
   }
 
-  // 4) create or reuse the test page (idempotent by slug; never touch others)
+  // Code-only target (canvas piece library): no page/placement.
+  if (!t.slug) {
+    console.log(`code-only target ${t.codeName}: ${cf.exports.filter((e) => e.type === "component").length} connectable component export(s) — no page.`)
+    continue
+  }
+
+  // 5) create or reuse the test page (idempotent by slug; never touch others)
   if (PROTECTED.has(t.slug)) { console.log(`REFUSING protected slug ${t.slug}`); continue }
   let page = existingPages.find((p) => p.path === t.slug)
   if (page) {

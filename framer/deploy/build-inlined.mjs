@@ -12,6 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const srcDir = path.join(here, "..")
 
 const helpers = fs.readFileSync(path.join(srcDir, "gmFormValidation.ts"), "utf8")
+const pieces = fs.readFileSync(path.join(srcDir, "GmCanvasPieces.tsx"), "utf8")
 // The helper module imports libphonenumber-js from an esm.sh URL. Hoist that
 // import out of the inlined body and place it with the component's own imports
 // at the top of the combined file (ES imports must sit at module top level).
@@ -20,7 +21,17 @@ const libImportMatch = helpers.match(libImportRe)
 const libImport = libImportMatch ? libImportMatch[0] : ""
 const helperBody = helpers.replace(libImportRe, "")
 
-const importBlock = /^import \{[\s\S]*?\} from "\.\/gmFormValidation"\n/m
+// The canvas outlet/field pieces are kept as a separate readable source file
+// in the repository, then inlined for Framer's isolated code-file runtime.
+const pieceImports = [
+    /^import React, [^\n]+\n/m,
+    /^import \{ addPropertyControls, ControlType \} from "framer"\n/m,
+    /^import \{ AGE_OPTIONS, GmFieldName \} from "\.\/gmFormValidation"\n/m,
+]
+const pieceBody = pieceImports.reduce((body, re) => body.replace(re, ""), pieces)
+
+const importBlock = /^import \{\n[\s\S]*?\n\} from "\.\/gmFormValidation"\n/m
+const piecesImportBlock = /^import \{\n[\s\S]*?\n\} from "\.\/GmCanvasPieces"\n/m
 
 function inline(componentFile) {
   let code = fs.readFileSync(path.join(srcDir, componentFile), "utf8")
@@ -32,15 +43,14 @@ function inline(componentFile) {
     `// ---- inlined from gmFormValidation.ts (see framer/ for the shared source) ----\n` +
     helperBody.trimEnd() +
     `\n// ---- end inlined helpers ----\n`
+    + `// ---- inlined from GmCanvasPieces.tsx (see framer/ for the shared source) ----\n`
+    + pieceBody.trimEnd()
+    + `\n// ---- end inlined canvas pieces ----\n`
   code = code.replace(importBlock, replacement)
+  code = code.replace(piecesImportBlock, "")
 
-  // Strip editor-only property controls for the deployed test build: Framer's
-  // headless typecheck sandbox does not resolve `addPropertyControls`/`ControlType`
-  // from "framer", and the controls are non-essential (the component uses default
-  // props). The repo reference versions keep them.
-  code = code.replace(/^import \{ addPropertyControls, ControlType \} from "framer"\n/m, "")
-  code = code.replace(/\naddPropertyControls\(\w+,\s*\{[\s\S]*?\n\}\)\n/m, "\n")
-
+  // Keep Framer Property Controls in the inlined file so the actual project
+  // exposes the same designer panel as the repository source component.
   return code
 }
 
@@ -52,3 +62,23 @@ for (const [src, out] of [
   fs.writeFileSync(path.join(here, out), result)
   console.log(`wrote ${out} (${result.length} bytes)`)
 }
+
+// Standalone, self-contained GmCanvasPieces code file. This is what designers
+// connect to the controller's Canvas ComponentInstance outlets, so it must be a
+// SEPARATE Framer code component (exports GmCanvasField / GmCanvasHeading /
+// GmCanvasSubmitButton). Its only ./gmFormValidation dependency is AGE_OPTIONS
+// and the GmFieldName type — inline both so the file has no relative import.
+const ageOptions = (helpers.match(/^export const AGE_OPTIONS[\s\S]*?^\]$/m) || [""])[0]
+const gmFieldName = (helpers.match(/^export type GmFieldName =[\s\S]*?"consentContact"$/m) || [""])[0]
+if (!ageOptions || !gmFieldName) {
+  throw new Error("Could not extract AGE_OPTIONS / GmFieldName from gmFormValidation.ts")
+}
+const piecesSelfContained =
+  pieces.replace(
+    /^import \{ AGE_OPTIONS, GmFieldName \} from "\.\/gmFormValidation"\n/m,
+    `// ---- inlined from gmFormValidation.ts (self-contained for Framer) ----\n` +
+    ageOptions + "\n" + gmFieldName + "\n" +
+    `// ---- end inlined ----\n`
+  )
+fs.writeFileSync(path.join(here, "GmCanvasPieces.inlined.tsx"), piecesSelfContained)
+console.log(`wrote GmCanvasPieces.inlined.tsx (${piecesSelfContained.length} bytes)`)
