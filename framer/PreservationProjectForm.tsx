@@ -41,10 +41,6 @@ import {
     classifyResponse,
     GmFieldName,
 } from "./gmFormValidation"
-import {
-    GmCanvasOutlet,
-    GmCanvasSlots,
-} from "./GmCanvasPieces"
 
 const HEADING = "Share a Gathering Idea"
 
@@ -270,34 +266,10 @@ function GmSelect(props: GmSelectProps) {
 interface Props {
     apiUrl?: string
     design?: GmFormDesignInput
-    canvasHeading?: React.ReactNode
-    canvasFirstName?: React.ReactNode
-    canvasLastName?: React.ReactNode
-    canvasEmail?: React.ReactNode
-    canvasPhone?: React.ReactNode
-    canvasAgeGroup?: React.ReactNode
-    canvasTitle?: React.ReactNode
-    canvasDescription?: React.ReactNode
-    canvasConsentReview?: React.ReactNode
-    canvasConsentContact?: React.ReactNode
-    canvasSubmitButton?: React.ReactNode
 }
 
 export default function PreservationProjectForm(props: Partial<Props>) {
     const apiUrl = props.apiUrl || GM_API_URL
-    const canvas: GmCanvasSlots = {
-        heading: props.canvasHeading,
-        firstName: props.canvasFirstName,
-        lastName: props.canvasLastName,
-        email: props.canvasEmail,
-        phone: props.canvasPhone,
-        ageGroup: props.canvasAgeGroup,
-        title: props.canvasTitle,
-        description: props.canvasDescription,
-        consentReview: props.canvasConsentReview,
-        consentContact: props.canvasConsentContact,
-        submitButton: props.canvasSubmitButton,
-    }
     const design = resolveGmFormDesign(props.design)
     const visualStyle = gmFormStyleVars(design) as React.CSSProperties
 
@@ -498,11 +470,7 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         return (
             <div className="gmf-card" style={visualStyle}>
                 <style>{GM_FORM_CSS}</style>
-                <GmCanvasOutlet
-                    slot={canvas?.heading}
-                    runtime={{ kind: "heading", text: HEADING }}
-                    fallback={<h2 className="gmf-heading">{HEADING}</h2>}
-                />
+                <h2 className="gmf-heading">{HEADING}</h2>
                 <div
                     ref={successRef}
                     tabIndex={-1}
@@ -532,11 +500,7 @@ export default function PreservationProjectForm(props: Partial<Props>) {
     return (
         <div className="gmf-card" style={visualStyle}>
             <style>{GM_FORM_CSS}</style>
-            <GmCanvasOutlet
-                slot={canvas?.heading}
-                runtime={{ kind: "heading", text: HEADING }}
-                fallback={<h2 className="gmf-heading">{HEADING}</h2>}
-            />
+            <h2 className="gmf-heading">{HEADING}</h2>
 
             <form className="gmf-form" onSubmit={handleSubmit} noValidate>
                 {/* Honeypot — off-screen, off the tab order, not required. */}
@@ -553,11 +517,6 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                 {/* Name row — First + Last (2-col grid, Oaken layout) */}
                 <div className="gmf-row">
                     <div className={fieldCls("firstName")}>
-                        <GmCanvasOutlet
-                            slot={canvas?.firstName}
-                            runtime={{ field: "firstName", kind: "field", id: "lp-firstName", label: "First name", type: "text", value: values.firstName, error: errors.firstName, describedBy: describedBy("firstName"), inputRef: refs.firstName, onTextChange: (v) => update("firstName", v) }}
-                            fallback={
-                                <>
                         <label className="gmf-label" htmlFor="lp-firstName">
                             First name
                         </label>
@@ -577,18 +536,10 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             />
                             <ErrorIcon />
                         </div>
-                                    {err("firstName")}
-                                </>
-                            }
-                        />
+                        {err("firstName")}
                     </div>
 
                     <div className={fieldCls("lastName")}>
-                        <GmCanvasOutlet
-                            slot={canvas?.lastName}
-                            runtime={{ field: "lastName", kind: "field", id: "lp-lastName", label: "Last name", type: "text", value: values.lastName, error: errors.lastName, describedBy: describedBy("lastName"), inputRef: refs.lastName, onTextChange: (v) => update("lastName", v) }}
-                            fallback={
-                                <>
                         <label className="gmf-label" htmlFor="lp-lastName">
                             Last name
                         </label>
@@ -608,17 +559,12 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             />
                             <ErrorIcon />
                         </div>
-                                    {err("lastName")}
-                                </>
-                            }
-                        />
+                        {err("lastName")}
                     </div>
                 </div>
 
                 {/* Email */}
                 <div className={fieldCls("email")}>
-                    <GmCanvasOutlet slot={canvas?.email} runtime={{ field: "email", kind: "field", id: "lp-email", label: "Email address — used to administer your submission", type: "email", value: values.email, error: errors.email, describedBy: describedBy("email"), inputRef: refs.email, onTextChange: (v) => update("email", v) }} fallback={
-                        <>
                     <label className="gmf-label" htmlFor="lp-email">
                         Email address
                         <span className="gmf-optional">
@@ -641,15 +587,11 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                            {err("email")}
-                        </>
-                    } />
+                    {err("email")}
                 </div>
 
                 {/* Phone — formats as you type; US or international */}
                 <div className={fieldCls("phone")}>
-                    <GmCanvasOutlet slot={canvas?.phone} runtime={{ field: "phone", kind: "field", id: "lp-phone", label: "Phone number (optional)", type: "tel", autoComplete: "tel", inputMode: "tel", value: values.phone, error: errors.phone, describedBy: errors.phone ? "phone-error" : "lp-phone-hint", inputRef: refs.phone, onTextChange: (v) => update("phone", formatPhoneOnEdit(values.phone, v)), onTextBlur: (v) => update("phone", formatPhoneValue(v)) }} fallback={
-                        <>
                     <label className="gmf-label" htmlFor="lp-phone">
                         Phone number{" "}
                         <span className="gmf-optional">(optional)</span>
@@ -686,15 +628,11 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         Include your country code for international numbers (e.g.
                         +44…).
                     </p>
-                            {err("phone")}
-                        </>
-                    } />
+                    {err("phone")}
                 </div>
 
                 {/* Age (submitter's own age) — accessible custom listbox */}
                 <div className={fieldCls("ageGroup")}>
-                    <GmCanvasOutlet slot={canvas?.ageGroup} runtime={{ field: "ageGroup", kind: "field", id: "lp-ageGroup", label: "Your age range", placeholder: "Select an age range", type: "age", value: values.ageGroup, error: errors.ageGroup, describedBy: describedBy("ageGroup"), inputRef: refs.ageGroup, onAgeChange: (v) => update("ageGroup", v) }} fallback={
-                        <>
                     <label
                         className="gmf-label"
                         id="lp-ageGroup-label"
@@ -712,15 +650,11 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         buttonRef={refs.ageGroup}
                         onSelect={(v) => update("ageGroup", v)}
                     />
-                            {err("ageGroup")}
-                        </>
-                    } />
+                    {err("ageGroup")}
                 </div>
 
                 {/* Title */}
                 <div className={fieldCls("title")}>
-                    <GmCanvasOutlet slot={canvas?.title} runtime={{ field: "title", kind: "field", id: "lp-title", label: "Gathering idea title", type: "text", value: values.title, error: errors.title, describedBy: describedBy("title"), inputRef: refs.title, onTextChange: (v) => update("title", v) }} fallback={
-                        <>
                     <label className="gmf-label" htmlFor="lp-title">
                         Gathering idea title
                     </label>
@@ -737,15 +671,11 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                            {err("title")}
-                        </>
-                    } />
+                    {err("title")}
                 </div>
 
                 {/* Description */}
                 <div className={fieldCls("description")}>
-                    <GmCanvasOutlet slot={canvas?.description} runtime={{ field: "description", kind: "field", id: "lp-description", label: "Description", type: "textarea", value: values.description, error: errors.description, describedBy: describedBy("description"), inputRef: refs.description, onTextChange: (v) => update("description", v) }} fallback={
-                        <>
                     <label className="gmf-label" htmlFor="lp-description">
                         Description
                     </label>
@@ -763,15 +693,11 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                         />
                         <ErrorIcon />
                     </div>
-                            {err("description")}
-                        </>
-                    } />
+                    {err("description")}
                 </div>
 
                 {/* Review consent (required) */}
                 <div className={fieldCls("consentReview")}>
-                    <GmCanvasOutlet slot={canvas?.consentReview} runtime={{ field: "consentReview", kind: "field", id: "lp-consentReview", label: "I agree that my submission may be reviewed by the Gathering Matters team.", type: "consent", value: values.consentReview, error: errors.consentReview, describedBy: describedBy("consentReview"), inputRef: refs.consentReview, onCheckedChange: (v) => update("consentReview", v) }} fallback={
-                        <>
                     <div className="gmf-checkbox-row">
                         <input
                             id="lp-consentReview"
@@ -792,15 +718,12 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             Gathering Matters team.
                         </label>
                     </div>
-                            {err("consentReview")}
-                        </>
-                    } />
+                    {err("consentReview")}
                 </div>
 
                 {/* Contact consent (optional for LP) */}
                 <div className={fieldCls("consentContact")}>
-                    <GmCanvasOutlet slot={canvas?.consentContact} runtime={{ field: "consentContact", kind: "field", id: "lp-consentContact", label: "Optional: the Gathering Matters team may contact me to follow up about this submission. (Your email is used to administer the submission either way.)", type: "consent", value: values.consentContact, error: errors.consentContact, describedBy: describedBy("consentContact"), inputRef: refs.consentContact, onCheckedChange: (v) => update("consentContact", v) }} fallback={
-                        <>
+                    <>
                     <div className="gmf-checkbox-row">
                         <input
                             id="lp-consentContact"
@@ -822,9 +745,8 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                             used to administer the submission either way.)
                         </label>
                     </div>
-                            {err("consentContact")}
-                        </>
-                    } />
+                    {err("consentContact")}
+                    </>
                 </div>
 
                 {formError && (
@@ -837,31 +759,19 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     </p>
                 )}
 
-                {!canvas?.submitButton && <button
+                <button
                     type="submit"
                     className="gmf-button"
                     disabled={status === "submitting"}
                 >
                     {status === "submitting" ? "Submitting…" : "Submit idea"}
-                </button>}
-                <GmCanvasOutlet slot={canvas?.submitButton} runtime={{ kind: "submit", submitting: status === "submitting" }} fallback={null} />
+                </button>
             </form>
         </div>
     )
 }
 
 addPropertyControls(PreservationProjectForm, {
-    canvasHeading: { type: ControlType.ComponentInstance, title: "Canvas heading" },
-    canvasFirstName: { type: ControlType.ComponentInstance, title: "Canvas first name" },
-    canvasLastName: { type: ControlType.ComponentInstance, title: "Canvas last name" },
-    canvasEmail: { type: ControlType.ComponentInstance, title: "Canvas email" },
-    canvasPhone: { type: ControlType.ComponentInstance, title: "Canvas phone" },
-    canvasAgeGroup: { type: ControlType.ComponentInstance, title: "Canvas age range" },
-    canvasTitle: { type: ControlType.ComponentInstance, title: "Canvas idea title" },
-    canvasDescription: { type: ControlType.ComponentInstance, title: "Canvas description" },
-    canvasConsentReview: { type: ControlType.ComponentInstance, title: "Canvas review consent" },
-    canvasConsentContact: { type: ControlType.ComponentInstance, title: "Canvas contact consent" },
-    canvasSubmitButton: { type: ControlType.ComponentInstance, title: "Canvas submit button" },
     design: {
         type: ControlType.Object,
         title: "Design",

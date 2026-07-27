@@ -20,14 +20,6 @@ const { connect, isComponentInstanceNode } = await import(pathToFileURL(framerAp
 
 const TARGETS = [
   {
-    // Canvas piece library: exports GmCanvasField / GmCanvasHeading /
-    // GmCanvasSubmitButton for designers to connect to the controller outlets.
-    // Code-only (no page). Deploy this FIRST so the pieces exist to connect.
-    codeName: "GmCanvasPieces.tsx",
-    file: "GmCanvasPieces.inlined.tsx",
-    slug: null,
-  },
-  {
     codeName: "PreservationProjectFormTest.tsx",
     file: "PreservationProjectForm.inlined.tsx",
     slug: "/listening-program-form-test",
@@ -89,12 +81,6 @@ for (const t of TARGETS) {
     || cf.exports.find((e) => e.type === "component")
   if (!exp || !exp.insertURL) {
     console.log(`no component export/insertURL for ${t.codeName}:`, JSON.stringify(cf.exports))
-    continue
-  }
-
-  // Code-only target (canvas piece library): no page/placement.
-  if (!t.slug) {
-    console.log(`code-only target ${t.codeName}: ${cf.exports.filter((e) => e.type === "component").length} connectable component export(s) — no page.`)
     continue
   }
 
