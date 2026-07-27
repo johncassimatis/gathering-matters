@@ -20,7 +20,7 @@
 //
 // Requires the shared code file `gmFormValidation.ts` in the same Framer project.
 
-import React, { useRef, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 // @ts-ignore
 import { parsePhoneNumberFromString, AsYouType } from "https://esm.sh/libphonenumber-js@1.13.9"
 
@@ -80,6 +80,25 @@ export const GM_FORM_CSS = `
    inset as every other field (icon replaces the chevron; base padding-right leaves
    room for either). Keeps all error icons aligned down the right edge. */
 .gmf-field.gmf-has-error .gmf-select{background-image:none}
+/* Custom accessible listbox (replaces the native <select> so the open menu
+   matches the GM form; the native popup can't be styled cross-browser). */
+.gmf-select-wrap{position:relative}
+.gmf-select-btn{box-sizing:border-box;display:flex;align-items:center;width:100%;height:48px;padding:12px 40px 12px 12px;font-size:16px;line-height:1.5;font-family:inherit;color:#25313B;text-align:left;background:#fff;border:0;border-radius:8px;box-shadow:inset 0 0 0 1px #D9DEE3;cursor:pointer;transition:box-shadow 160ms ease,background-color 160ms ease}
+.gmf-select-btn:hover{box-shadow:inset 0 0 0 1px #B9C2CB}
+.gmf-select-btn:focus-visible,.gmf-select-btn:focus{outline:none;box-shadow:inset 0 0 0 1px #1D1D7A,0 0 0 3px rgba(29,29,122,.18)}
+.gmf-select-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gmf-select-placeholder{flex:1;min-width:0;color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gmf-select-chevron{position:absolute;right:14px;top:50%;transform:translateY(-50%);pointer-events:none;transition:transform 160ms ease}
+.gmf-select-wrap[data-open="true"] .gmf-select-chevron{transform:translateY(-50%) rotate(180deg)}
+.gmf-field.gmf-has-error .gmf-select-btn{background:#FDF4F4;box-shadow:inset 0 0 0 1px #B42318}
+.gmf-field.gmf-has-error .gmf-select-btn:focus{box-shadow:inset 0 0 0 1px #B42318,0 0 0 3px rgba(180,35,24,.16)}
+.gmf-field.gmf-has-error .gmf-select-chevron{display:none}
+.gmf-listbox{position:absolute;z-index:30;top:calc(100% + 6px);left:0;right:0;margin:0;padding:6px;list-style:none;background:#FFFDF8;border-radius:10px;box-shadow:inset 0 0 0 1px #EAE6DA,0 12px 28px rgba(20,30,45,.16);max-height:264px;overflow-y:auto}
+.gmf-option{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:6px;font-size:15px;line-height:1.3;color:#25313B;cursor:pointer;user-select:none}
+.gmf-option.is-active{background:rgba(29,29,122,.10)}
+.gmf-option.is-selected{font-weight:600}
+.gmf-option.is-selected.is-active{background:rgba(29,29,122,.16)}
+.gmf-option[aria-selected="true"]::after{content:"✓";margin-left:8px;color:#1D1D7A;font-weight:700}
 .gmf-error{margin:2px 0 0;font-size:13px;line-height:1.4;font-weight:600;color:#B42318}
 .gmf-hint{margin:2px 0 0;font-size:13px;line-height:1.4;color:#5B6670}
 .gmf-field.gmf-has-error .gmf-hint{display:none}
@@ -172,13 +191,33 @@ export function toE164(value: string): string {
     return p ? p.number : ""
 }
 
-// Live/as-you-type formatting for a controlled input. Given the previous value
-// and the raw value the browser produced after the user's edit, returns the
-// reformatted value. US national numbers → (415) 555-0142; "+" numbers → the
-// library's international grouping.
+// Format from digits. US/Canada uses Oaken's custom NANP formatting (NOT
+// AsYouType, which renders a country code as a bare "1 (916)…"): the 10-digit
+// national number shows as "(916) 533-8235"; a leading country code shows as
+// "+1 (916) 533-8235" — never bare "1 (…)". International uses AsYouType with a
+// synthesized "+". Canonical submission stays E.164 (see toE164), independent of
+// this display — so autofilled "1 (916) 533-8235" still submits +19165338235.
+function formatPhoneDigits(startsWithPlus: boolean, digits: string): string {
+    const hasNanpCountryCode = digits.startsWith("1")
+    const nanpEligible = startsWithPlus
+        ? hasNanpCountryCode && digits.length <= 11
+        : (hasNanpCountryCode && digits.length <= 11) || digits.length <= 10
+    if (nanpEligible) {
+        const nsn = hasNanpCountryCode ? digits.slice(1) : digits
+        const prefix = hasNanpCountryCode ? "+1 " : ""
+        if (nsn.length === 0) return prefix.trim()
+        if (nsn.length < 4) return `${prefix}(${nsn}`
+        if (nsn.length < 7) return `${prefix}(${nsn.slice(0, 3)}) ${nsn.slice(3)}`
+        return `${prefix}(${nsn.slice(0, 3)}) ${nsn.slice(3, 6)}-${nsn.slice(6, 10)}`
+    }
+    return new AsYouType(DEFAULT_COUNTRY).input(`+${digits}`)
+}
+
+// Live/as-you-type formatting for a controlled input, given the previous value
+// and the raw value the browser produced after the user's edit.
 //
 // Deletion treats formatting characters as non-content and avoids the "backspace
-// trap": at 3 digits AsYouType emits "(916)"; a plain backspace there removes only
+// trap": at 3 digits the display is "(916)"; a plain backspace there removes only
 // the auto-added ")", which re-formatting would re-add. So when a backspace removed
 // only a separator (digit count unchanged), we drop the last real DIGIT instead —
 // one backspace deletes the digit and "(913)" → "91". The reformat is otherwise
@@ -188,7 +227,7 @@ export function formatPhoneOnEdit(previous: string, raw: string): string {
     const next = String(raw || "")
     if (!next) return ""
     const deleting = next.length < prev.length
-    const hasPlus = next.trim().startsWith("+") || prev.trim().startsWith("+")
+    const startsWithPlus = next.trim().startsWith("+") || prev.trim().startsWith("+")
     let digits = next.replace(/\D/g, "")
     if (deleting) {
         const prevDigits = prev.replace(/\D/g, "")
@@ -197,7 +236,15 @@ export function formatPhoneOnEdit(previous: string, raw: string): string {
             digits = digits.slice(0, -1)
         }
     }
-    return new AsYouType(DEFAULT_COUNTRY).input(phoneInputFor(hasPlus, digits))
+    return formatPhoneDigits(startsWithPlus, digits)
+}
+
+// Reformat a complete value (on blur, or after browser autofill, which can set
+// the field without ordinary keystrokes). No deletion handling — just normalize.
+export function formatPhoneValue(value: string): string {
+    const raw = String(value || "")
+    if (!raw) return ""
+    return formatPhoneDigits(raw.trim().startsWith("+"), raw.replace(/\D/g, ""))
 }
 
 // --- response handling ------------------------------------------------------
@@ -299,6 +346,199 @@ function ErrorIcon() {
     )
 }
 
+function ChevronIcon() {
+    return (
+        <svg
+            className="gmf-select-chevron"
+            width="12"
+            height="8"
+            viewBox="0 0 12 8"
+            fill="none"
+            aria-hidden="true"
+        >
+            <path
+                d="M1 1.5L6 6.5L11 1.5"
+                stroke="#25313B"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    )
+}
+
+interface GmSelectProps {
+    id: string
+    value: string
+    placeholder: string
+    options: ReadonlyArray<{ label: string; value: string }>
+    invalid: boolean
+    describedBy?: string
+    buttonRef: React.RefObject<HTMLButtonElement>
+    onSelect: (value: string) => void
+}
+
+// Accessible select-only combobox/listbox (ARIA APG pattern). Replaces the
+// native <select> so the OPEN menu matches the GM form — the native popup can't
+// be styled cross-browser. Keyboard: Up/Down, Home/End, Enter/Space, Escape,
+// Tab, first-letter type-ahead; click-outside closes; focus returns to the
+// button; the selected value still maps to the backend enum.
+function GmSelect(props: GmSelectProps) {
+    const { id, value, placeholder, options, invalid, describedBy, buttonRef, onSelect } = props
+    const [open, setOpen] = useState(false)
+    const [activeIndex, setActiveIndex] = useState(-1)
+    const wrapRef = useRef<HTMLDivElement>(null)
+    const listRef = useRef<HTMLUListElement>(null)
+
+    const labelId = `${id}-label`
+    const listId = `${id}-listbox`
+    const optId = (i: number) => `${id}-opt-${i}`
+    const selectedIndex = options.findIndex((o) => o.value === value)
+    const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : ""
+
+    function openList(to?: number) {
+        setActiveIndex(to ?? (selectedIndex >= 0 ? selectedIndex : 0))
+        setOpen(true)
+    }
+    function closeList(focusButton = true) {
+        setOpen(false)
+        setActiveIndex(-1)
+        if (focusButton) buttonRef.current?.focus()
+    }
+    function choose(i: number) {
+        const o = options[i]
+        if (o) onSelect(o.value)
+        closeList()
+    }
+
+    useEffect(() => {
+        if (!open) return
+        function onDoc(e: PointerEvent) {
+            if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+                setOpen(false)
+                setActiveIndex(-1)
+            }
+        }
+        document.addEventListener("pointerdown", onDoc)
+        return () => document.removeEventListener("pointerdown", onDoc)
+    }, [open])
+
+    useEffect(() => {
+        if (open && activeIndex >= 0 && listRef.current) {
+            const el = listRef.current.children[activeIndex] as
+                | HTMLElement
+                | undefined
+            el?.scrollIntoView({ block: "nearest" })
+        }
+    }, [open, activeIndex])
+
+    function onKeyDown(e: React.KeyboardEvent) {
+        const k = e.key
+        if (!open) {
+            if (k === "ArrowDown" || k === "ArrowUp" || k === "Enter" || k === " ") {
+                e.preventDefault()
+                openList()
+            }
+            return
+        }
+        if (k === "ArrowDown") {
+            e.preventDefault()
+            setActiveIndex((i) =>
+                Math.min(options.length - 1, (i < 0 ? selectedIndex : i) + 1)
+            )
+        } else if (k === "ArrowUp") {
+            e.preventDefault()
+            setActiveIndex((i) => Math.max(0, (i < 0 ? selectedIndex : i) - 1))
+        } else if (k === "Home") {
+            e.preventDefault()
+            setActiveIndex(0)
+        } else if (k === "End") {
+            e.preventDefault()
+            setActiveIndex(options.length - 1)
+        } else if (k === "Enter" || k === " ") {
+            e.preventDefault()
+            if (activeIndex >= 0) choose(activeIndex)
+        } else if (k === "Escape") {
+            e.preventDefault()
+            closeList()
+        } else if (k === "Tab") {
+            closeList(false)
+        } else if (k.length === 1 && /\S/.test(k)) {
+            const idx = options.findIndex((o) =>
+                o.label.toLowerCase().startsWith(k.toLowerCase())
+            )
+            if (idx >= 0) setActiveIndex(idx)
+        }
+    }
+
+    return (
+        <div
+            className="gmf-select-wrap"
+            ref={wrapRef}
+            data-open={open ? "true" : "false"}
+        >
+            <button
+                type="button"
+                id={id}
+                ref={buttonRef}
+                className="gmf-select-btn"
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={listId}
+                aria-labelledby={labelId}
+                aria-activedescendant={
+                    open && activeIndex >= 0 ? optId(activeIndex) : undefined
+                }
+                aria-invalid={invalid}
+                aria-describedby={describedBy}
+                onClick={() => (open ? closeList() : openList())}
+                onKeyDown={onKeyDown}
+            >
+                <span
+                    className={
+                        selectedLabel
+                            ? "gmf-select-value"
+                            : "gmf-select-placeholder"
+                    }
+                >
+                    {selectedLabel || placeholder}
+                </span>
+            </button>
+            <ChevronIcon />
+            <ErrorIcon />
+            {open && (
+                <ul
+                    className="gmf-listbox"
+                    id={listId}
+                    role="listbox"
+                    ref={listRef}
+                    aria-labelledby={labelId}
+                >
+                    {options.map((o, i) => (
+                        <li
+                            key={o.value}
+                            id={optId(i)}
+                            role="option"
+                            aria-selected={o.value === value}
+                            className={
+                                "gmf-option" +
+                                (i === activeIndex ? " is-active" : "") +
+                                (o.value === value ? " is-selected" : "")
+                            }
+                            onMouseEnter={() => setActiveIndex(i)}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => choose(i)}
+                        >
+                            <span>{o.label}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    )
+}
+
 interface Props {
     apiUrl: string
 }
@@ -331,7 +571,7 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         lastName: useRef<HTMLInputElement>(null),
         email: useRef<HTMLInputElement>(null),
         phone: useRef<HTMLInputElement>(null),
-        ageGroup: useRef<HTMLSelectElement>(null),
+        ageGroup: useRef<HTMLButtonElement>(null),
         title: useRef<HTMLInputElement>(null),
         description: useRef<HTMLTextAreaElement>(null),
         consentReview: useRef<HTMLInputElement>(null),
@@ -651,6 +891,9 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                                     )
                                 )
                             }
+                            onBlur={(e) =>
+                                update("phone", formatPhoneValue(e.target.value))
+                            }
                         />
                         <ErrorIcon />
                     </div>
@@ -661,34 +904,25 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                     {err("phone")}
                 </div>
 
-                {/* Age (submitter's own age) */}
+                {/* Age (submitter's own age) — accessible custom listbox */}
                 <div className={fieldCls("ageGroup")}>
-                    <label className="gmf-label" htmlFor="yai-ageGroup">
+                    <label
+                        className="gmf-label"
+                        id="yai-ageGroup-label"
+                        htmlFor="yai-ageGroup"
+                    >
                         Your age range
                     </label>
-                    <div className="gmf-control gmf-control--select">
-                        <select
-                            className="gmf-select"
-                            id="yai-ageGroup"
-                            ref={refs.ageGroup}
-                            value={values.ageGroup}
-                            aria-invalid={Boolean(errors.ageGroup)}
-                            aria-describedby={describedBy("ageGroup")}
-                            onChange={(e) =>
-                                update("ageGroup", e.target.value)
-                            }
-                        >
-                            <option value="" disabled>
-                                Select an age range
-                            </option>
-                            {AGE_OPTIONS.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                    {o.label}
-                                </option>
-                            ))}
-                        </select>
-                        <ErrorIcon />
-                    </div>
+                    <GmSelect
+                        id="yai-ageGroup"
+                        value={values.ageGroup}
+                        placeholder="Select an age range"
+                        options={AGE_OPTIONS}
+                        invalid={Boolean(errors.ageGroup)}
+                        describedBy={describedBy("ageGroup")}
+                        buttonRef={refs.ageGroup}
+                        onSelect={(v) => update("ageGroup", v)}
+                    />
                     {err("ageGroup")}
                 </div>
 

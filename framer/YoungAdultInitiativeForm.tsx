@@ -20,7 +20,7 @@
 //
 // Requires the shared code file `gmFormValidation.ts` in the same Framer project.
 
-import React, { useRef, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { addPropertyControls, ControlType } from "framer"
 import {
     GM_API_URL,
@@ -32,6 +32,7 @@ import {
     isValidPhone,
     toE164,
     formatPhoneOnEdit,
+    formatPhoneValue,
     readJsonSafely,
     classifyResponse,
     GmFieldName,
@@ -62,6 +63,199 @@ function ErrorIcon() {
                 fill="#B42318"
             />
         </svg>
+    )
+}
+
+function ChevronIcon() {
+    return (
+        <svg
+            className="gmf-select-chevron"
+            width="12"
+            height="8"
+            viewBox="0 0 12 8"
+            fill="none"
+            aria-hidden="true"
+        >
+            <path
+                d="M1 1.5L6 6.5L11 1.5"
+                stroke="#25313B"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    )
+}
+
+interface GmSelectProps {
+    id: string
+    value: string
+    placeholder: string
+    options: ReadonlyArray<{ label: string; value: string }>
+    invalid: boolean
+    describedBy?: string
+    buttonRef: React.RefObject<HTMLButtonElement>
+    onSelect: (value: string) => void
+}
+
+// Accessible select-only combobox/listbox (ARIA APG pattern). Replaces the
+// native <select> so the OPEN menu matches the GM form — the native popup can't
+// be styled cross-browser. Keyboard: Up/Down, Home/End, Enter/Space, Escape,
+// Tab, first-letter type-ahead; click-outside closes; focus returns to the
+// button; the selected value still maps to the backend enum.
+function GmSelect(props: GmSelectProps) {
+    const { id, value, placeholder, options, invalid, describedBy, buttonRef, onSelect } = props
+    const [open, setOpen] = useState(false)
+    const [activeIndex, setActiveIndex] = useState(-1)
+    const wrapRef = useRef<HTMLDivElement>(null)
+    const listRef = useRef<HTMLUListElement>(null)
+
+    const labelId = `${id}-label`
+    const listId = `${id}-listbox`
+    const optId = (i: number) => `${id}-opt-${i}`
+    const selectedIndex = options.findIndex((o) => o.value === value)
+    const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : ""
+
+    function openList(to?: number) {
+        setActiveIndex(to ?? (selectedIndex >= 0 ? selectedIndex : 0))
+        setOpen(true)
+    }
+    function closeList(focusButton = true) {
+        setOpen(false)
+        setActiveIndex(-1)
+        if (focusButton) buttonRef.current?.focus()
+    }
+    function choose(i: number) {
+        const o = options[i]
+        if (o) onSelect(o.value)
+        closeList()
+    }
+
+    useEffect(() => {
+        if (!open) return
+        function onDoc(e: PointerEvent) {
+            if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+                setOpen(false)
+                setActiveIndex(-1)
+            }
+        }
+        document.addEventListener("pointerdown", onDoc)
+        return () => document.removeEventListener("pointerdown", onDoc)
+    }, [open])
+
+    useEffect(() => {
+        if (open && activeIndex >= 0 && listRef.current) {
+            const el = listRef.current.children[activeIndex] as
+                | HTMLElement
+                | undefined
+            el?.scrollIntoView({ block: "nearest" })
+        }
+    }, [open, activeIndex])
+
+    function onKeyDown(e: React.KeyboardEvent) {
+        const k = e.key
+        if (!open) {
+            if (k === "ArrowDown" || k === "ArrowUp" || k === "Enter" || k === " ") {
+                e.preventDefault()
+                openList()
+            }
+            return
+        }
+        if (k === "ArrowDown") {
+            e.preventDefault()
+            setActiveIndex((i) =>
+                Math.min(options.length - 1, (i < 0 ? selectedIndex : i) + 1)
+            )
+        } else if (k === "ArrowUp") {
+            e.preventDefault()
+            setActiveIndex((i) => Math.max(0, (i < 0 ? selectedIndex : i) - 1))
+        } else if (k === "Home") {
+            e.preventDefault()
+            setActiveIndex(0)
+        } else if (k === "End") {
+            e.preventDefault()
+            setActiveIndex(options.length - 1)
+        } else if (k === "Enter" || k === " ") {
+            e.preventDefault()
+            if (activeIndex >= 0) choose(activeIndex)
+        } else if (k === "Escape") {
+            e.preventDefault()
+            closeList()
+        } else if (k === "Tab") {
+            closeList(false)
+        } else if (k.length === 1 && /\S/.test(k)) {
+            const idx = options.findIndex((o) =>
+                o.label.toLowerCase().startsWith(k.toLowerCase())
+            )
+            if (idx >= 0) setActiveIndex(idx)
+        }
+    }
+
+    return (
+        <div
+            className="gmf-select-wrap"
+            ref={wrapRef}
+            data-open={open ? "true" : "false"}
+        >
+            <button
+                type="button"
+                id={id}
+                ref={buttonRef}
+                className="gmf-select-btn"
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={listId}
+                aria-labelledby={labelId}
+                aria-activedescendant={
+                    open && activeIndex >= 0 ? optId(activeIndex) : undefined
+                }
+                aria-invalid={invalid}
+                aria-describedby={describedBy}
+                onClick={() => (open ? closeList() : openList())}
+                onKeyDown={onKeyDown}
+            >
+                <span
+                    className={
+                        selectedLabel
+                            ? "gmf-select-value"
+                            : "gmf-select-placeholder"
+                    }
+                >
+                    {selectedLabel || placeholder}
+                </span>
+            </button>
+            <ChevronIcon />
+            <ErrorIcon />
+            {open && (
+                <ul
+                    className="gmf-listbox"
+                    id={listId}
+                    role="listbox"
+                    ref={listRef}
+                    aria-labelledby={labelId}
+                >
+                    {options.map((o, i) => (
+                        <li
+                            key={o.value}
+                            id={optId(i)}
+                            role="option"
+                            aria-selected={o.value === value}
+                            className={
+                                "gmf-option" +
+                                (i === activeIndex ? " is-active" : "") +
+                                (o.value === value ? " is-selected" : "")
+                            }
+                            onMouseEnter={() => setActiveIndex(i)}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => choose(i)}
+                        >
+                            <span>{o.label}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
     )
 }
 
@@ -97,7 +291,7 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         lastName: useRef<HTMLInputElement>(null),
         email: useRef<HTMLInputElement>(null),
         phone: useRef<HTMLInputElement>(null),
-        ageGroup: useRef<HTMLSelectElement>(null),
+        ageGroup: useRef<HTMLButtonElement>(null),
         title: useRef<HTMLInputElement>(null),
         description: useRef<HTMLTextAreaElement>(null),
         consentReview: useRef<HTMLInputElement>(null),
@@ -417,6 +611,9 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                                     )
                                 )
                             }
+                            onBlur={(e) =>
+                                update("phone", formatPhoneValue(e.target.value))
+                            }
                         />
                         <ErrorIcon />
                     </div>
@@ -427,34 +624,25 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                     {err("phone")}
                 </div>
 
-                {/* Age (submitter's own age) */}
+                {/* Age (submitter's own age) — accessible custom listbox */}
                 <div className={fieldCls("ageGroup")}>
-                    <label className="gmf-label" htmlFor="yai-ageGroup">
+                    <label
+                        className="gmf-label"
+                        id="yai-ageGroup-label"
+                        htmlFor="yai-ageGroup"
+                    >
                         Your age range
                     </label>
-                    <div className="gmf-control gmf-control--select">
-                        <select
-                            className="gmf-select"
-                            id="yai-ageGroup"
-                            ref={refs.ageGroup}
-                            value={values.ageGroup}
-                            aria-invalid={Boolean(errors.ageGroup)}
-                            aria-describedby={describedBy("ageGroup")}
-                            onChange={(e) =>
-                                update("ageGroup", e.target.value)
-                            }
-                        >
-                            <option value="" disabled>
-                                Select an age range
-                            </option>
-                            {AGE_OPTIONS.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                    {o.label}
-                                </option>
-                            ))}
-                        </select>
-                        <ErrorIcon />
-                    </div>
+                    <GmSelect
+                        id="yai-ageGroup"
+                        value={values.ageGroup}
+                        placeholder="Select an age range"
+                        options={AGE_OPTIONS}
+                        invalid={Boolean(errors.ageGroup)}
+                        describedBy={describedBy("ageGroup")}
+                        buttonRef={refs.ageGroup}
+                        onSelect={(v) => update("ageGroup", v)}
+                    />
                     {err("ageGroup")}
                 </div>
 
