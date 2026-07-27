@@ -18,6 +18,13 @@ const MAX_TITLE = 160, MAX_BODY = 5000, MAX_NAME = 120, MAX_EMAIL = 254, MAX_PHO
 const WINDOW_MINUTES = 60, MAX_PER_WINDOW = 5, DUP_WINDOW_HOURS = 24;
 const SOURCES = new Set(['listening_program', 'young_adult_initiative']);
 const AGE_RANGES = new Set(['under_18','18_24','25_34','35_44','45_54','55_64','65_plus','prefer_not_to_say']);
+// Source-aware consent policy. Email is basic administrative contact for the
+// submission and is required for every public source. Follow-up (contact)
+// consent is required only where follow-up is a core purpose of the programme
+// (Young Adult Initiative); for other sources it stays an explicit, optional
+// choice — providing an email does not by itself authorise follow-up.
+const EMAIL_REQUIRED_SOURCES = new Set(['listening_program', 'young_adult_initiative']);
+const CONTACT_CONSENT_REQUIRED_SOURCES = new Set(['young_adult_initiative']);
 
 const normalizeTitle = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
 
@@ -90,6 +97,9 @@ export default {
         }
 
         if (!SOURCES.has(source)) throw new BadRequestError({ reason: 'invalid source' });
+        if (EMAIL_REQUIRED_SOURCES.has(source) && !submitterEmail) {
+          throw new ValidationError({ reason: 'submitter_email is required' });
+        }
         if (title.length < 3 || title.length > MAX_TITLE) throw new ValidationError({ reason: `title 3..${MAX_TITLE}` });
         if (body.length < 20 || body.length > MAX_BODY) throw new ValidationError({ reason: `body 20..${MAX_BODY}` });
         if (submitterName.length > MAX_NAME) throw new ValidationError({ reason: `submitter_name max ${MAX_NAME}` });
@@ -97,10 +107,13 @@ export default {
         if (submitterPhone.length > MAX_PHONE) throw new ValidationError({ reason: `submitter_phone max ${MAX_PHONE}` });
         if (submitterAgeRange && !AGE_RANGES.has(submitterAgeRange)) throw new ValidationError({ reason: 'invalid age_range' });
         if (!consentToReview) throw new ValidationError({ reason: 'consent_to_review must be true' });
-        const hasContactInfo = Boolean(submitterEmail || submitterPhone);
-        if (hasContactInfo && !consentToContact) {
-          throw new ValidationError({ reason: 'consent_to_contact required when contact info supplied' });
+        // Follow-up consent is mandatory only for sources where follow-up is a
+        // core purpose (e.g. Young Adult Initiative). Other sources leave it as
+        // an explicit, optional choice even though an email is on file.
+        if (CONTACT_CONSENT_REQUIRED_SOURCES.has(source) && !consentToContact) {
+          throw new ValidationError({ reason: 'consent_to_contact is required for this source' });
         }
+        const hasContactInfo = Boolean(submitterEmail || submitterPhone);
 
         if (ipHash) {
           const [{ count }] = await db('risk_event')

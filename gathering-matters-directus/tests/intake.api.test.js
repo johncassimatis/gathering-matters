@@ -79,12 +79,46 @@ describe('POST /gm-intake/submissions', () => {
       expect(res.status).toBe(422);
     });
 
-    it('Fails if contact info supplied without consent_to_contact', async () => {
-      const res = await intakeRequest('/gm-intake/submissions')
-        .send({ ...validPayload, submitter_phone: '555-1234', consent_to_contact: false });
+    it('Fails if submitter_email is missing (required for every source)', async () => {
+      const { submitter_email, ...noEmail } = validPayload;
+      const res = await intakeRequest('/gm-intake/submissions').send(noEmail);
 
       expect(res.status).toBe(422);
+      expect(Array.isArray(res.body.errors)).toBe(true);
     });
+
+    it('Fails if young_adult_initiative is missing submitter_email', async () => {
+      const { submitter_email, ...noEmail } = validPayload;
+      const res = await intakeRequest('/gm-intake/submissions')
+        .send({ ...noEmail, source: 'young_adult_initiative' });
+
+      expect(res.status).toBe(422);
+      expect(Array.isArray(res.body.errors)).toBe(true);
+    });
+
+    it('young_adult_initiative fails without consent_to_contact', async () => {
+      const res = await intakeRequest('/gm-intake/submissions')
+        .send({ ...validPayload, source: 'young_adult_initiative', consent_to_contact: false });
+
+      expect(res.status).toBe(422);
+      expect(Array.isArray(res.body.errors)).toBe(true);
+    });
+  });
+
+  it('Listening Program: email without contact consent returns 201 (contact consent optional)', async () => {
+    const res = await intakeRequest('/gm-intake/submissions')
+      .send({ ...validPayload, title: `${fixtures.successTitlePrefix}-lp-nocontact-${Date.now()}`, consent_to_contact: false });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.status).toBe('pending');
+  });
+
+  it('Young Adult Initiative: valid submission with contact consent returns 201', async () => {
+    const res = await intakeRequest('/gm-intake/submissions')
+      .send({ ...validPayload, source: 'young_adult_initiative', title: `${fixtures.successTitlePrefix}-yai-${Date.now()}` });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.status).toBe('pending');
   });
 
   it('Rate limits after 5 submissions in 60min', async () => {
