@@ -303,6 +303,21 @@ export const AGE_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
     { label: "65+", value: "65_plus" },
 ]
 
+// Young Adult Initiative is a programme FOR young adults, so the submitter's own
+// age is restricted to the eligible bucket. The backend AGE_RANGES set still
+// validates the value; this only narrows the UI choices for that one form.
+export const YAI_AGE_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
+    { label: "18–24", value: "18_24" },
+]
+
+// Preferred follow-up method (Young Adult Initiative). Right-hand values are the
+// backend `preferred_follow_up` enum (email | phone | video).
+export const FOLLOW_UP_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
+    { label: "Email", value: "email" },
+    { label: "Phone call", value: "phone" },
+    { label: "Video call", value: "video" },
+]
+
 // User-facing status messages. "Directus" is never surfaced to visitors.
 export const MESSAGES = {
     connection:
@@ -446,27 +461,28 @@ export function extractBackendReason(data: any): string {
 // Map a backend reason string to one of the shared field keys. Both forms use
 // the same field names, so this mapping is shared. Returns null when unmappable.
 export type GmFieldName =
-    | "title"
-    | "description"
     | "firstName"
     | "lastName"
     | "email"
     | "phone"
     | "ageGroup"
-    | "consentReview"
-    | "consentContact"
+    | "idea"
+    | "followUp"
+    | "consentAgree"
+    | "consentUpdates"
 
 export function mapReasonToField(reason: string): GmFieldName | null {
     const r = reason.toLowerCase()
-    if (r.includes("title")) return "title"
-    if (r.includes("body")) return "description"
+    // The single "idea" field maps to the backend title/body pair.
+    if (r.includes("title") || r.includes("body")) return "idea"
     if (r.includes("email")) return "email"
     if (r.includes("phone")) return "phone"
+    if (r.includes("follow")) return "followUp"
     if (r.includes("age")) return "ageGroup"
     if (r.includes("name")) return "firstName"
-    if (r.includes("consent_to_contact") || r.includes("contact"))
-        return "consentContact"
-    if (r.includes("consent")) return "consentReview"
+    if (r.includes("updates")) return "consentUpdates"
+    // review + contact are one agreement checkbox now.
+    if (r.includes("consent")) return "consentAgree"
     return null
 }
 

@@ -12,11 +12,12 @@
 // Young Adult Initiative rules (confirmed):
 //   - first + last name required; email REQUIRED (follow-up is a core purpose)
 //   - phone optional (US/NANP or international, validated when provided)
-//   - consent_to_review required
-//   - consent_to_contact REQUIRED
-//   - age: "Your age range" = the SUBMITTER'S OWN age → submitter_age_range
-//     (dropdown 18_24…65_plus; NOT hardcoded — the field is the submitter's age)
-//   - body = the initiative description only (no follow-up append)
+//   - one agreement checkbox (REQUIRED) covers review + contact
+//   - a second checkbox (OPTIONAL) is marketing updates → consent_to_updates
+//   - preferred follow-up method REQUIRED (email | phone | video)
+//   - age: "Your age range" = the SUBMITTER'S OWN age → submitter_age_range,
+//     restricted to the eligible 18–24 bucket for this programme
+//   - one "About Gathering Initiative" field → body (a short title is derived)
 //
 // Requires the shared code file `gmFormValidation.ts` in the same Framer project.
 
@@ -29,7 +30,8 @@ import {
     GmFormDesignInput,
     gmFormStyleVars,
     resolveGmFormDesign,
-    AGE_OPTIONS,
+    YAI_AGE_OPTIONS,
+    FOLLOW_UP_OPTIONS,
     MESSAGES,
     isBlank,
     isValidEmail,
@@ -279,10 +281,10 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         email: "",
         phone: "",
         ageGroup: "",
-        title: "",
-        description: "",
-        consentReview: false,
-        consentContact: false,
+        idea: "",
+        followUp: "",
+        consentAgree: false,
+        consentUpdates: false,
         website: "", // honeypot
     })
     const [errors, setErrors] = useState<Partial<Record<GmFieldName, string>>>(
@@ -299,10 +301,10 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         email: useRef<HTMLInputElement>(null),
         phone: useRef<HTMLInputElement>(null),
         ageGroup: useRef<HTMLButtonElement>(null),
-        title: useRef<HTMLInputElement>(null),
-        description: useRef<HTMLTextAreaElement>(null),
-        consentReview: useRef<HTMLInputElement>(null),
-        consentContact: useRef<HTMLInputElement>(null),
+        idea: useRef<HTMLTextAreaElement>(null),
+        followUp: useRef<HTMLButtonElement>(null),
+        consentAgree: useRef<HTMLInputElement>(null),
+        consentUpdates: useRef<HTMLInputElement>(null),
     } as const
     const successRef = useRef<HTMLDivElement>(null)
 
@@ -346,30 +348,21 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         if (isBlank(values.ageGroup))
             next.ageGroup = "Please select your age range."
 
-        const title = values.title.trim()
-        if (isBlank(values.title)) next.title = "Please enter a title."
-        else if (title.length < 3)
-            next.title = "Title must be at least 3 characters."
-        else if (title.length > 160)
-            next.title = "Title must be 160 characters or fewer."
+        const idea = values.idea.trim()
+        if (isBlank(values.idea))
+            next.idea = "Please tell us about your initiative."
+        else if (idea.length < 20)
+            next.idea = "Please use at least 20 characters."
+        else if (idea.length > 5000)
+            next.idea = "Please use 5000 characters or fewer."
 
-        const body = values.description.trim()
-        if (isBlank(values.description))
-            next.description = "Please enter a description."
-        else if (body.length < 20)
-            next.description = "Description must be at least 20 characters."
-        else if (body.length > 5000)
-            next.description = "Description must be 5000 characters or fewer."
+        if (isBlank(values.followUp))
+            next.followUp = "Please choose a preferred follow-up method."
 
-        if (!values.consentReview)
-            next.consentReview =
-                "Please confirm your submission may be reviewed."
+        if (!values.consentAgree)
+            next.consentAgree = "Please confirm you agree before submitting."
 
-        // Contact consent REQUIRED for YAI (follow-up is a core purpose).
-        if (!values.consentContact)
-            next.consentContact =
-                "Follow-up consent is required to take part in this program."
-
+        // Updates consent (consentUpdates) is optional and never blocks submit.
         return next
     }
 
@@ -379,10 +372,10 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         "email",
         "phone",
         "ageGroup",
-        "title",
-        "description",
-        "consentReview",
-        "consentContact",
+        "idea",
+        "followUp",
+        "consentAgree",
+        "consentUpdates",
     ]
 
     function focusFirst(errs: Partial<Record<GmFieldName, string>>) {
@@ -411,19 +404,27 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
         setStatus("submitting")
 
         const phone = values.phone.trim()
+        const idea = values.idea.trim()
         const submitterName = [values.firstName.trim(), values.lastName.trim()]
             .filter(Boolean)
             .join(" ")
+        // Derive a short title from the idea so the current endpoint (which still
+        // requires a title) keeps accepting submissions; Phase 3 can relax this.
+        const derivedTitle = idea.replace(/\s+/g, " ").slice(0, 120)
         const payload = {
             source: "young_adult_initiative",
-            title: values.title,
-            body: values.description, // description only — no follow-up append
+            title: derivedTitle,
+            body: idea,
             submitter_name: submitterName,
             submitter_email: values.email.trim(),
             submitter_phone: phone ? toE164(phone) || phone : "",
             submitter_age_range: values.ageGroup, // the submitter's own age
-            consent_to_review: values.consentReview,
-            consent_to_contact: values.consentContact,
+            preferred_follow_up: values.followUp,
+            // One required agreement checkbox authorises both review and contact.
+            consent_to_review: values.consentAgree,
+            consent_to_contact: values.consentAgree,
+            // Optional marketing consent — separate field, never blocks submit.
+            consent_to_updates: values.consentUpdates,
             website: values.website,
         }
 
@@ -521,7 +522,6 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                 {/* Name row — First + Last (2-col grid) */}
                 <div className="gmf-row">
                     <div className={fieldCls("firstName")}>
-                        <>
                         <label className="gmf-label" htmlFor="yai-firstName">
                             First name
                         </label>
@@ -542,11 +542,9 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                             <ErrorIcon />
                         </div>
                         {err("firstName")}
-                        </>
                     </div>
 
                     <div className={fieldCls("lastName")}>
-                        <>
                         <label className="gmf-label" htmlFor="yai-lastName">
                             Last name
                         </label>
@@ -567,7 +565,6 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                             <ErrorIcon />
                         </div>
                         {err("lastName")}
-                        </>
                     </div>
                 </div>
 
@@ -653,7 +650,7 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                         id="yai-ageGroup"
                         value={values.ageGroup}
                         placeholder="Select an age range"
-                        options={AGE_OPTIONS}
+                        options={YAI_AGE_OPTIONS}
                         invalid={Boolean(errors.ageGroup)}
                         describedBy={describedBy("ageGroup")}
                         buttonRef={refs.ageGroup}
@@ -663,106 +660,95 @@ export default function YoungAdultInitiativeForm(props: Partial<Props>) {
                     </>
                 </div>
 
-                {/* Title */}
-                <div className={fieldCls("title")}>
-                    <>
-                    <label className="gmf-label" htmlFor="yai-title">
-                        Initiative title
-                    </label>
-                    <div className="gmf-control">
-                        <input
-                            className="gmf-input"
-                            id="yai-title"
-                            ref={refs.title}
-                            type="text"
-                            value={values.title}
-                            aria-invalid={Boolean(errors.title)}
-                            aria-describedby={describedBy("title")}
-                            onChange={(e) => update("title", e.target.value)}
-                        />
-                        <ErrorIcon />
-                    </div>
-                    {err("title")}
-                    </>
-                </div>
-
-                {/* Description */}
-                <div className={fieldCls("description")}>
-                    <>
-                    <label className="gmf-label" htmlFor="yai-description">
-                        Initiative description
+                {/* About Gathering Initiative (single field → body) */}
+                <div className={fieldCls("idea")}>
+                    <label className="gmf-label" htmlFor="yai-idea">
+                        About Gathering Initiative
                     </label>
                     <div className="gmf-control gmf-control--textarea">
                         <textarea
                             className="gmf-textarea"
-                            id="yai-description"
-                            ref={refs.description}
-                            value={values.description}
-                            aria-invalid={Boolean(errors.description)}
-                            aria-describedby={describedBy("description")}
-                            onChange={(e) =>
-                                update("description", e.target.value)
-                            }
+                            id="yai-idea"
+                            ref={refs.idea}
+                            placeholder="Tell us about your initiative."
+                            value={values.idea}
+                            aria-invalid={Boolean(errors.idea)}
+                            aria-describedby={describedBy("idea")}
+                            onChange={(e) => update("idea", e.target.value)}
                         />
                         <ErrorIcon />
                     </div>
-                    {err("description")}
-                    </>
+                    {err("idea")}
                 </div>
 
-                {/* Review consent (required) */}
-                <div className={fieldCls("consentReview")}>
-                    <>
+                {/* Preferred follow-up method (required) — accessible listbox */}
+                <div className={fieldCls("followUp")}>
+                    <label
+                        className="gmf-label"
+                        id="yai-followUp-label"
+                        htmlFor="yai-followUp"
+                    >
+                        Preferred follow-up method
+                    </label>
+                    <GmSelect
+                        id="yai-followUp"
+                        value={values.followUp}
+                        placeholder="Select a follow-up method"
+                        options={FOLLOW_UP_OPTIONS}
+                        invalid={Boolean(errors.followUp)}
+                        describedBy={describedBy("followUp")}
+                        buttonRef={refs.followUp}
+                        onSelect={(v) => update("followUp", v)}
+                    />
+                    {err("followUp")}
+                </div>
+
+                {/* Agreement consent (required) — covers review + contact */}
+                <div className={fieldCls("consentAgree")}>
                     <div className="gmf-checkbox-row">
                         <input
-                            id="yai-consentReview"
-                            ref={refs.consentReview}
+                            id="yai-consentAgree"
+                            ref={refs.consentAgree}
                             type="checkbox"
-                            checked={values.consentReview}
-                            aria-invalid={Boolean(errors.consentReview)}
-                            aria-describedby={describedBy("consentReview")}
+                            checked={values.consentAgree}
+                            aria-invalid={Boolean(errors.consentAgree)}
+                            aria-describedby={describedBy("consentAgree")}
                             onChange={(e) =>
-                                update("consentReview", e.target.checked)
+                                update("consentAgree", e.target.checked)
                             }
                         />
                         <label
                             className="gmf-checkbox-label"
-                            htmlFor="yai-consentReview"
+                            htmlFor="yai-consentAgree"
                         >
-                            I agree that my submission may be reviewed by the
-                            Gathering Matters team.
+                            I agree that Gathering Matters may review my
+                            submission and contact me about it.
                         </label>
                     </div>
-                    {err("consentReview")}
-                    </>
+                    {err("consentAgree")}
                 </div>
 
-                {/* Contact consent (required for YAI) */}
-                <div className={fieldCls("consentContact")}>
-                    <>
+                {/* Updates consent (optional) */}
+                <div className={fieldCls("consentUpdates")}>
                     <div className="gmf-checkbox-row">
                         <input
-                            id="yai-consentContact"
-                            ref={refs.consentContact}
+                            id="yai-consentUpdates"
+                            ref={refs.consentUpdates}
                             type="checkbox"
-                            checked={values.consentContact}
-                            aria-invalid={Boolean(errors.consentContact)}
-                            aria-describedby={describedBy("consentContact")}
+                            checked={values.consentUpdates}
+                            aria-invalid={Boolean(errors.consentUpdates)}
+                            aria-describedby={describedBy("consentUpdates")}
                             onChange={(e) =>
-                                update("consentContact", e.target.checked)
+                                update("consentUpdates", e.target.checked)
                             }
                         />
                         <label
                             className="gmf-checkbox-label"
-                            htmlFor="yai-consentContact"
+                            htmlFor="yai-consentUpdates"
                         >
-                            I agree that the Gathering Matters team may contact
-                            me to follow up about this submission. Follow-up
-                            conversation is part of the Young Adult Initiative.
+                            I'd like to receive updates from Gathering Matters.
                         </label>
                     </div>
-                    {err("consentContact")}
-                    </>
                 </div>
 
                 {formError && (

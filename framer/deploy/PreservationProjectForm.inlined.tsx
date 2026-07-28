@@ -13,9 +13,11 @@
 // Listening Program rules (confirmed):
 //   - first + last name required; email REQUIRED (administrative contact)
 //   - phone optional (US/NANP or international, validated when provided)
-//   - consent_to_review required
-//   - consent_to_contact OPTIONAL — the required email does NOT itself authorise
-//     follow-up; the separate checkbox does
+//   - one agreement checkbox (REQUIRED) covers review + contact: sets both
+//     consent_to_review and consent_to_contact true
+//   - a second checkbox (OPTIONAL) is marketing updates → consent_to_updates;
+//     never bundled into the required agreement (must be freely given)
+//   - one "Gathering idea" field → body (a short title is derived for review)
 //   - age: "Your age range" = the SUBMITTER'S OWN age → submitter_age_range
 //
 // Requires the shared code file `gmFormValidation.ts` in the same Framer project.
@@ -329,6 +331,21 @@ export const AGE_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
     { label: "65+", value: "65_plus" },
 ]
 
+// Young Adult Initiative is a programme FOR young adults, so the submitter's own
+// age is restricted to the eligible bucket. The backend AGE_RANGES set still
+// validates the value; this only narrows the UI choices for that one form.
+export const YAI_AGE_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
+    { label: "18–24", value: "18_24" },
+]
+
+// Preferred follow-up method (Young Adult Initiative). Right-hand values are the
+// backend `preferred_follow_up` enum (email | phone | video).
+export const FOLLOW_UP_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
+    { label: "Email", value: "email" },
+    { label: "Phone call", value: "phone" },
+    { label: "Video call", value: "video" },
+]
+
 // User-facing status messages. "Directus" is never surfaced to visitors.
 export const MESSAGES = {
     connection:
@@ -472,27 +489,28 @@ export function extractBackendReason(data: any): string {
 // Map a backend reason string to one of the shared field keys. Both forms use
 // the same field names, so this mapping is shared. Returns null when unmappable.
 export type GmFieldName =
-    | "title"
-    | "description"
     | "firstName"
     | "lastName"
     | "email"
     | "phone"
     | "ageGroup"
-    | "consentReview"
-    | "consentContact"
+    | "idea"
+    | "followUp"
+    | "consentAgree"
+    | "consentUpdates"
 
 export function mapReasonToField(reason: string): GmFieldName | null {
     const r = reason.toLowerCase()
-    if (r.includes("title")) return "title"
-    if (r.includes("body")) return "description"
+    // The single "idea" field maps to the backend title/body pair.
+    if (r.includes("title") || r.includes("body")) return "idea"
     if (r.includes("email")) return "email"
     if (r.includes("phone")) return "phone"
+    if (r.includes("follow")) return "followUp"
     if (r.includes("age")) return "ageGroup"
     if (r.includes("name")) return "firstName"
-    if (r.includes("consent_to_contact") || r.includes("contact"))
-        return "consentContact"
-    if (r.includes("consent")) return "consentReview"
+    if (r.includes("updates")) return "consentUpdates"
+    // review + contact are one agreement checkbox now.
+    if (r.includes("consent")) return "consentAgree"
     return null
 }
 
@@ -754,10 +772,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         email: "",
         phone: "",
         ageGroup: "",
-        title: "",
-        description: "",
-        consentReview: false,
-        consentContact: false,
+        idea: "",
+        consentAgree: false,
+        consentUpdates: false,
         website: "", // honeypot
     })
     const [errors, setErrors] = useState<Partial<Record<GmFieldName, string>>>(
@@ -774,10 +791,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         email: useRef<HTMLInputElement>(null),
         phone: useRef<HTMLInputElement>(null),
         ageGroup: useRef<HTMLButtonElement>(null),
-        title: useRef<HTMLInputElement>(null),
-        description: useRef<HTMLTextAreaElement>(null),
-        consentReview: useRef<HTMLInputElement>(null),
-        consentContact: useRef<HTMLInputElement>(null),
+        idea: useRef<HTMLTextAreaElement>(null),
+        consentAgree: useRef<HTMLInputElement>(null),
+        consentUpdates: useRef<HTMLInputElement>(null),
     } as const
     const successRef = useRef<HTMLDivElement>(null)
 
@@ -821,26 +837,18 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         if (isBlank(values.ageGroup))
             next.ageGroup = "Please select your age range."
 
-        const title = values.title.trim()
-        if (isBlank(values.title)) next.title = "Please enter a title."
-        else if (title.length < 3)
-            next.title = "Title must be at least 3 characters."
-        else if (title.length > 160)
-            next.title = "Title must be 160 characters or fewer."
+        const idea = values.idea.trim()
+        if (isBlank(values.idea))
+            next.idea = "Please describe your gathering idea."
+        else if (idea.length < 20)
+            next.idea = "Please use at least 20 characters."
+        else if (idea.length > 5000)
+            next.idea = "Please use 5000 characters or fewer."
 
-        const body = values.description.trim()
-        if (isBlank(values.description))
-            next.description = "Please enter a description."
-        else if (body.length < 20)
-            next.description = "Description must be at least 20 characters."
-        else if (body.length > 5000)
-            next.description = "Description must be 5000 characters or fewer."
+        if (!values.consentAgree)
+            next.consentAgree = "Please confirm you agree before submitting."
 
-        if (!values.consentReview)
-            next.consentReview =
-                "Please confirm your submission may be reviewed."
-
-        // consent_to_contact is optional for the Listening Program.
+        // Updates consent (consentUpdates) is optional and never blocks submit.
         return next
     }
 
@@ -850,15 +858,15 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         "email",
         "phone",
         "ageGroup",
-        "title",
-        "description",
-        "consentReview",
-        "consentContact",
+        "idea",
+        "consentAgree",
+        "consentUpdates",
     ]
 
     function focusFirst(errs: Partial<Record<GmFieldName, string>>) {
         const key = ORDER.find((k) => errs[k])
-        const el = key ? refs[key].current : null
+        // refs holds only this form's fields (no followUp) — GmFieldName is shared.
+        const el = key ? refs[key as keyof typeof refs]?.current : null
         if (el) {
             el.scrollIntoView({ behavior: "smooth", block: "center" })
             el.focus({ preventScroll: true })
@@ -882,19 +890,27 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         setStatus("submitting")
 
         const phone = values.phone.trim()
+        const idea = values.idea.trim()
         const submitterName = [values.firstName.trim(), values.lastName.trim()]
             .filter(Boolean)
             .join(" ")
+        // Derive a short title from the idea so the current endpoint (which still
+        // requires a title) keeps accepting submissions; the reviewer sees it as a
+        // preview. Phase 3 can relax this once the backend treats title as optional.
+        const derivedTitle = idea.replace(/\s+/g, " ").slice(0, 120)
         const payload = {
             source: "listening_program",
-            title: values.title,
-            body: values.description,
+            title: derivedTitle,
+            body: idea,
             submitter_name: submitterName,
             submitter_email: values.email.trim(),
             submitter_phone: phone ? toE164(phone) || phone : "",
             submitter_age_range: values.ageGroup,
-            consent_to_review: values.consentReview,
-            consent_to_contact: values.consentContact,
+            // One required agreement checkbox authorises both review and contact.
+            consent_to_review: values.consentAgree,
+            consent_to_contact: values.consentAgree,
+            // Optional marketing consent — separate field, never blocks submit.
+            consent_to_updates: values.consentUpdates,
             website: values.website,
         }
 
@@ -928,7 +944,7 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     [outcome.field!]: "Please check this field and try again.",
                 }))
                 setStatus("error")
-                refs[outcome.field].current?.focus?.()
+                refs[outcome.field as keyof typeof refs]?.current?.focus?.()
             } else {
                 setStatus("error")
                 setFormError(MESSAGES.validationFallback)
@@ -989,7 +1005,7 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     onChange={(e) => update("website", e.target.value)}
                 />
 
-                {/* Name row — First + Last (2-col grid, Oaken layout) */}
+                {/* Name row — First + Last (2-col grid) */}
                 <div className="gmf-row">
                     <div className={fieldCls("firstName")}>
                         <label className="gmf-label" htmlFor="lp-firstName">
@@ -1128,100 +1144,73 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     {err("ageGroup")}
                 </div>
 
-                {/* Title */}
-                <div className={fieldCls("title")}>
-                    <label className="gmf-label" htmlFor="lp-title">
-                        Gathering idea title
-                    </label>
-                    <div className="gmf-control">
-                        <input
-                            className="gmf-input"
-                            id="lp-title"
-                            ref={refs.title}
-                            type="text"
-                            value={values.title}
-                            aria-invalid={Boolean(errors.title)}
-                            aria-describedby={describedBy("title")}
-                            onChange={(e) => update("title", e.target.value)}
-                        />
-                        <ErrorIcon />
-                    </div>
-                    {err("title")}
-                </div>
-
-                {/* Description */}
-                <div className={fieldCls("description")}>
-                    <label className="gmf-label" htmlFor="lp-description">
-                        Description
+                {/* Gathering idea (single field → body) */}
+                <div className={fieldCls("idea")}>
+                    <label className="gmf-label" htmlFor="lp-idea">
+                        Gathering idea
                     </label>
                     <div className="gmf-control gmf-control--textarea">
                         <textarea
                             className="gmf-textarea"
-                            id="lp-description"
-                            ref={refs.description}
-                            value={values.description}
-                            aria-invalid={Boolean(errors.description)}
-                            aria-describedby={describedBy("description")}
-                            onChange={(e) =>
-                                update("description", e.target.value)
-                            }
+                            id="lp-idea"
+                            ref={refs.idea}
+                            placeholder="What would you like to share?"
+                            value={values.idea}
+                            aria-invalid={Boolean(errors.idea)}
+                            aria-describedby={describedBy("idea")}
+                            onChange={(e) => update("idea", e.target.value)}
                         />
                         <ErrorIcon />
                     </div>
-                    {err("description")}
+                    {err("idea")}
                 </div>
 
-                {/* Review consent (required) */}
-                <div className={fieldCls("consentReview")}>
+                {/* Agreement consent (required) — covers review + contact */}
+                <div className={fieldCls("consentAgree")}>
                     <div className="gmf-checkbox-row">
                         <input
-                            id="lp-consentReview"
-                            ref={refs.consentReview}
+                            id="lp-consentAgree"
+                            ref={refs.consentAgree}
                             type="checkbox"
-                            checked={values.consentReview}
-                            aria-invalid={Boolean(errors.consentReview)}
-                            aria-describedby={describedBy("consentReview")}
+                            checked={values.consentAgree}
+                            aria-invalid={Boolean(errors.consentAgree)}
+                            aria-describedby={describedBy("consentAgree")}
                             onChange={(e) =>
-                                update("consentReview", e.target.checked)
+                                update("consentAgree", e.target.checked)
                             }
                         />
                         <label
                             className="gmf-checkbox-label"
-                            htmlFor="lp-consentReview"
+                            htmlFor="lp-consentAgree"
                         >
-                            I agree that my submission may be reviewed by the
-                            Gathering Matters team.
+                            I agree that Gathering Matters may review my
+                            submission and contact me about it.
                         </label>
                     </div>
-                    {err("consentReview")}
+                    {err("consentAgree")}
                 </div>
 
-                {/* Contact consent (optional for LP) */}
-                <div className={fieldCls("consentContact")}>
-                    <>
+                {/* Updates consent (optional) */}
+                <div className={fieldCls("consentUpdates")}>
                     <div className="gmf-checkbox-row">
                         <input
-                            id="lp-consentContact"
-                            ref={refs.consentContact}
+                            id="lp-consentUpdates"
+                            ref={refs.consentUpdates}
                             type="checkbox"
-                            checked={values.consentContact}
-                            aria-invalid={Boolean(errors.consentContact)}
-                            aria-describedby={describedBy("consentContact")}
+                            checked={values.consentUpdates}
+                            aria-invalid={Boolean(errors.consentUpdates)}
+                            aria-describedby={describedBy("consentUpdates")}
                             onChange={(e) =>
-                                update("consentContact", e.target.checked)
+                                update("consentUpdates", e.target.checked)
                             }
                         />
                         <label
                             className="gmf-checkbox-label"
-                            htmlFor="lp-consentContact"
+                            htmlFor="lp-consentUpdates"
                         >
-                            Optional: the Gathering Matters team may contact me
-                            to follow up about this submission. (Your email is
-                            used to administer the submission either way.)
+                            I'd like to receive updates from Gathering Matters.
                         </label>
                     </div>
-                    {err("consentContact")}
-                    </>
                 </div>
 
                 {formError && (
