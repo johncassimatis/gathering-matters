@@ -56,12 +56,27 @@ describe('POST /gm-intake/submissions', () => {
   });
 
   describe('Validation failures (422)', () => {
-    it('Fails if title is too short', async () => {
+    it('Fails if title exceeds the max length', async () => {
       const res = await intakeRequest('/gm-intake/submissions')
-        .send({ ...validPayload, title: 'ab' });
+        .send({ ...validPayload, title: 'x'.repeat(200) });
 
       expect(res.status).toBe(422);
       expect(Array.isArray(res.body.errors)).toBe(true);
+    });
+
+    it('young_adult_initiative fails without preferred_follow_up', async () => {
+      const res = await intakeRequest('/gm-intake/submissions')
+        .send({ ...validPayload, source: 'young_adult_initiative' });
+
+      expect(res.status).toBe(422);
+      expect(Array.isArray(res.body.errors)).toBe(true);
+    });
+
+    it('rejects an invalid preferred_follow_up value', async () => {
+      const res = await intakeRequest('/gm-intake/submissions')
+        .send({ ...validPayload, source: 'young_adult_initiative', preferred_follow_up: 'carrier_pigeon' });
+
+      expect(res.status).toBe(422);
     });
 
     it('Fails if body is too short', async () => {
@@ -105,17 +120,26 @@ describe('POST /gm-intake/submissions', () => {
     });
   });
 
-  it('Listening Program: email without contact consent returns 201 (contact consent optional)', async () => {
+  it('Listening Program: fails without consent_to_contact (contact consent now required for every source)', async () => {
     const res = await intakeRequest('/gm-intake/submissions')
-      .send({ ...validPayload, title: `${fixtures.successTitlePrefix}-lp-nocontact-${Date.now()}`, consent_to_contact: false });
+      .send({ ...validPayload, consent_to_contact: false });
+
+    expect(res.status).toBe(422);
+    expect(Array.isArray(res.body.errors)).toBe(true);
+  });
+
+  it('Title is optional at intake (single-idea forms send none)', async () => {
+    const { title, ...noTitle } = validPayload;
+    const res = await intakeRequest('/gm-intake/submissions')
+      .send({ ...noTitle, body: `Optional-title submission with at least twenty characters ${Date.now()}` });
 
     expect(res.status).toBe(201);
     expect(res.body.data.status).toBe('pending');
   });
 
-  it('Young Adult Initiative: valid submission with contact consent returns 201', async () => {
+  it('Young Adult Initiative: valid submission with contact + follow-up + updates returns 201', async () => {
     const res = await intakeRequest('/gm-intake/submissions')
-      .send({ ...validPayload, source: 'young_adult_initiative', title: `${fixtures.successTitlePrefix}-yai-${Date.now()}` });
+      .send({ ...validPayload, source: 'young_adult_initiative', preferred_follow_up: 'video', consent_to_updates: true, title: `${fixtures.successTitlePrefix}-yai-${Date.now()}` });
 
     expect(res.status).toBe(201);
     expect(res.body.data.status).toBe('pending');
