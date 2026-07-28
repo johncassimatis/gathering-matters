@@ -18,13 +18,16 @@ const MAX_TITLE = 160, MAX_BODY = 5000, MAX_NAME = 120, MAX_EMAIL = 254, MAX_PHO
 const WINDOW_MINUTES = 60, MAX_PER_WINDOW = 5, DUP_WINDOW_HOURS = 24;
 const SOURCES = new Set(['listening_program', 'young_adult_initiative']);
 const AGE_RANGES = new Set(['under_18','18_24','25_34','35_44','45_54','55_64','65_plus','prefer_not_to_say']);
-// Source-aware consent policy. Email is basic administrative contact for the
-// submission and is required for every public source. Follow-up (contact)
-// consent is required only where follow-up is a core purpose of the programme
-// (Young Adult Initiative); for other sources it stays an explicit, optional
-// choice — providing an email does not by itself authorise follow-up.
+// Consent policy. Email is basic administrative contact and is required for
+// every public source. Contact (follow-up) consent is now required for every
+// source: the aligned forms present one required agreement checkbox that
+// authorises both review and contact. Updates (marketing) consent stays
+// optional and is stored separately (see updates_consent).
 const EMAIL_REQUIRED_SOURCES = new Set(['listening_program', 'young_adult_initiative']);
-const CONTACT_CONSENT_REQUIRED_SOURCES = new Set(['young_adult_initiative']);
+const CONTACT_CONSENT_REQUIRED_SOURCES = new Set(['listening_program', 'young_adult_initiative']);
+// Preferred follow-up method (Young Adult Initiative).
+const FOLLOW_UP_METHODS = new Set(['email', 'phone', 'video']);
+const FOLLOW_UP_REQUIRED_SOURCES = new Set(['young_adult_initiative']);
 
 const normalizeTitle = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
 
@@ -57,6 +60,7 @@ export default {
         const secret = env.GM_RISK_HASH_SECRET;
         const reviewNoticeVersion = env.GM_SUBMISSION_CONSENT_VERSION || 'v1';
         const contactNoticeVersion = env.GM_CONTACT_CONSENT_VERSION || reviewNoticeVersion;
+        const updatesNoticeVersion = env.GM_UPDATES_CONSENT_VERSION || reviewNoticeVersion;
         if (!secret) throw new SubmissionError({ reason: 'GM_RISK_HASH_SECRET is not configured' });
 
         const raw = req.body ?? {};
@@ -70,6 +74,8 @@ export default {
         const honeypot = normalizeInline(raw.website);
         const consentToReview = raw.consent_to_review === true;
         const consentToContact = raw.consent_to_contact === true;
+        const consentToUpdates = raw.consent_to_updates === true;
+        const preferredFollowUp = normalizeInline(raw.preferred_follow_up).toLowerCase();
         const requestedTestRunId = req.headers['x-gm-test-run-id'];
         const testRunId = env.GM_TEST_MODE === true || env.GM_TEST_MODE === 'true'
           ? (isUuid(requestedTestRunId) ? requestedTestRunId : null)
@@ -100,18 +106,24 @@ export default {
         if (EMAIL_REQUIRED_SOURCES.has(source) && !submitterEmail) {
           throw new ValidationError({ reason: 'submitter_email is required' });
         }
-        if (title.length < 3 || title.length > MAX_TITLE) throw new ValidationError({ reason: `title 3..${MAX_TITLE}` });
+        // Title is optional at intake (the single-idea forms don't collect one;
+        // the DB allows null title until a reviewer sets it at promotion).
+        if (title.length > MAX_TITLE) throw new ValidationError({ reason: `title max ${MAX_TITLE}` });
         if (body.length < 20 || body.length > MAX_BODY) throw new ValidationError({ reason: `body 20..${MAX_BODY}` });
         if (submitterName.length > MAX_NAME) throw new ValidationError({ reason: `submitter_name max ${MAX_NAME}` });
         if (submitterEmail.length > MAX_EMAIL || !isValidEmail(submitterEmail)) throw new ValidationError({ reason: 'invalid email' });
         if (submitterPhone.length > MAX_PHONE) throw new ValidationError({ reason: `submitter_phone max ${MAX_PHONE}` });
         if (submitterAgeRange && !AGE_RANGES.has(submitterAgeRange)) throw new ValidationError({ reason: 'invalid age_range' });
         if (!consentToReview) throw new ValidationError({ reason: 'consent_to_review must be true' });
-        // Follow-up consent is mandatory only for sources where follow-up is a
-        // core purpose (e.g. Young Adult Initiative). Other sources leave it as
-        // an explicit, optional choice even though an email is on file.
+        // Contact (follow-up) consent is required for every source now.
         if (CONTACT_CONSENT_REQUIRED_SOURCES.has(source) && !consentToContact) {
           throw new ValidationError({ reason: 'consent_to_contact is required for this source' });
+        }
+        if (preferredFollowUp && !FOLLOW_UP_METHODS.has(preferredFollowUp)) {
+          throw new ValidationError({ reason: 'invalid preferred_follow_up' });
+        }
+        if (FOLLOW_UP_REQUIRED_SOURCES.has(source) && !preferredFollowUp) {
+          throw new ValidationError({ reason: 'preferred_follow_up is required for this source' });
         }
         const hasContactInfo = Boolean(submitterEmail || submitterPhone);
 
@@ -142,19 +154,28 @@ export default {
           ? { contact_consent: true, contact_consent_at: db.fn.now(), contact_consent_notice_version: contactNoticeVersion }
           : { contact_consent: false, contact_consent_at: null, contact_consent_notice_version: null };
 
+        // Updates (marketing) consent — optional, stored independently of contact
+        // consent (a marketing opt-in must be freely given, never bundled).
+        const updatesConsentFields = consentToUpdates
+          ? { updates_consent: true, updates_consent_at: db.fn.now(), updates_consent_notice_version: updatesNoticeVersion }
+          : { updates_consent: false, updates_consent_at: null, updates_consent_notice_version: null };
+
         const submissionId = await db.transaction(async (trx) => {
           const [inserted] = await trx('submission')
             .insert({
-              source, title, body,
+              source, body,
+              title: title || null,
               status: 'pending',
               submitter_name: submitterName || null,
               submitter_email: submitterEmail || null,
               submitter_phone: submitterPhone || null,
               submitter_age_range: submitterAgeRange || null,
+              preferred_follow_up: preferredFollowUp || null,
               consent: true,
               consent_at: trx.fn.now(),
               consent_notice_version: reviewNoticeVersion,
               ...contactConsentFields,
+              ...updatesConsentFields,
               date_created: trx.fn.now(),
               date_updated: trx.fn.now(),
             })
