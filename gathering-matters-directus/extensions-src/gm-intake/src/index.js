@@ -59,7 +59,15 @@ async function readObjectIdentity(env, storageLocation, filenameDisk) {
   const credentials = env.STORAGE_S3_KEY && env.STORAGE_S3_SECRET
     ? { accessKeyId: env.STORAGE_S3_KEY, secretAccessKey: env.STORAGE_S3_SECRET }
     : undefined;
-  const client = new S3Client({ region, ...(credentials ? { credentials } : {}) });
+  const endpoint = env.STORAGE_S3_ENDPOINT || process.env.STORAGE_S3_ENDPOINT;
+  const forcePathStyle = env.STORAGE_S3_FORCE_PATH_STYLE === true || env.STORAGE_S3_FORCE_PATH_STYLE === 'true'
+    || process.env.STORAGE_S3_FORCE_PATH_STYLE === 'true';
+  const client = new S3Client({
+    region,
+    ...(endpoint ? { endpoint } : {}),
+    ...(forcePathStyle ? { forcePathStyle: true } : {}),
+    ...(credentials ? { credentials } : {}),
+  });
   const head = await client.send(new HeadObjectCommand({
     Bucket: bucket,
     Key: s3KeyFor(env, filenameDisk),

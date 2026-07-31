@@ -34,7 +34,7 @@ test('published clean active downloadable file streams through the custom route'
 
 for (const state of [
   'unpublished', 'archived', 'future', 'inactive', 'deleted', 'not_download', 'pending',
-  'threats', 'unsupported', 'access_denied', 'failed', 'missing_scan', 'wrong_version', 'etag_mismatch',
+  'threats', 'unsupported', 'access_denied', 'failed', 'missing_scan',
 ]) {
   test(`download is blocked for ${state}`, { skip: skip.skip || !cases[state] ? `missing ${state} fixture` : undefined }, async () => {
     assertGenericBlocked(await download(cases[state]));
@@ -53,4 +53,3 @@ test('anonymous Directus assets are blocked after managed public-policy revocati
 test('malformed UUIDs are rejected before any storage lookup', skip, async () => {
   assertGenericBlocked(await download('not-a-uuid'));
 });
-

@@ -21,6 +21,9 @@ const admin = (await request('/auth/login', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ email: process.env.GM_INTEGRATION_ADMIN_EMAIL || 'admin@example.com', password: process.env.GM_INTEGRATION_ADMIN_PASSWORD || 'integration-admin-password' }),
 })).data.access_token;
+const configuredRoleTokens = (() => {
+  try { return JSON.parse(process.env.GM_INTEGRATION_ROLE_TOKENS || '{}'); } catch { return {}; }
+})();
 
 const db = new pg.Client({ connectionString: DATABASE_URL });
 await db.connect();
@@ -31,11 +34,30 @@ if (!typeResult.rows[0]) {
 }
 const adminUserId = (await db.query("SELECT id FROM directus_users WHERE email = 'admin@example.com'")).rows[0].id;
 
-const uploaded = (await (async () => {
+await (async () => {
   const form = new FormData();
-  form.append('file', new Blob([Buffer.from('clean disposable attachment\n')], { type: 'text/plain' }), 'clean-disposable.txt');
-  return request('/files', { method: 'POST', headers: { authorization: `Bearer ${admin}` }, body: form });
-})()).data;
+  for (const [key, value] of Object.entries({
+    source: 'listening_program',
+    title: `Fixture seed ${crypto.randomUUID()}`,
+    body: 'This is a valid integration-test submission body with enough characters.',
+    submitter_name: 'Integration Fixture',
+    submitter_email: `fixture-${crypto.randomUUID()}@test.invalid`,
+    consent_to_review: 'true',
+    consent_to_contact: 'true',
+    consent_to_updates: 'false',
+  })) form.append(key, value);
+  form.append('attachments', new Blob([Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF')], { type: 'application/pdf' }), 'clean-disposable.pdf');
+  await request('/gm-intake/submissions', {
+    method: 'POST',
+    headers: {
+      'x-gm-test-run-id': `fixture-seed-${crypto.randomUUID()}`,
+      'x-forwarded-for': `198.51.100.${Math.floor(Math.random() * 200) + 20}`,
+    },
+    body: form,
+  });
+})();
+const uploaded = (await db.query("SELECT id FROM directus_files WHERE filename_download = 'clean-disposable.pdf' ORDER BY uploaded_on DESC LIMIT 1")).rows[0];
+if (!uploaded) throw new Error('fixture seed did not create a local FilesService upload');
 
 async function cloneFile(id, label) {
   await db.query(`
@@ -128,7 +150,7 @@ await db.end();
 const roleTokens = {};
 for (const role of ['Contributor', 'Moderator', 'Editor', 'Publisher']) {
   const email = `gm-integration-${role.toLowerCase()}@example.com`;
-  roleTokens[role] = (await request('/auth/login', {
+  roleTokens[role] = configuredRoleTokens[role] || (await request('/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password: 'Integration-password-123!' }),

@@ -89,7 +89,7 @@ export default {
           .where('fs.scan_status', 'NO_THREATS_FOUND')
           .first(
             'df.id', 'df.storage', 'df.filename_disk', 'df.filename_download', 'df.title', 'df.filesize',
-            'fs.object_key', 'fs.object_version_id', 'fs.bucket'
+            'fs.object_key', 'fs.object_version_id', 'fs.etag', 'fs.bucket'
           );
 
         if (!row) return res.status(404).json({ error: 'not_found' });
@@ -124,7 +124,7 @@ export default {
           .where((qb) => qb.whereNull('fs.origin').orWhere('fs.origin', 'STAFF_MANAGED'))
           .first(
             'df.id', 'df.storage', 'df.filename_disk', 'df.filename_download', 'df.title', 'df.filesize',
-            'fs.object_key', 'fs.object_version_id', 'fs.bucket'
+            'fs.object_key', 'fs.object_version_id', 'fs.etag', 'fs.bucket'
           );
         if (!row) return res.status(404).json({ error: 'not_found' });
         await streamStoredFile({ env, file: row, scan: row, res });

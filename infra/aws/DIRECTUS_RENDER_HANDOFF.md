@@ -95,6 +95,8 @@ deployment order in `gathering-matters-db/docs/s3-scan-gating-design.md`):
 GM_PUBLIC_FILE_UPLOADS_ENABLED=false   # public document intake (PDF/DOCX/PPTX/XLSX/TXT)
 GM_SCAN_CONSUMER_ENABLED=false         # SQS scan-result consumer (Pending -> Clean Staff Review)
 GM_SCAN_GATING_ENABLED=false           # gm-library + editorial folder gating
+GM_PUBLIC_DOWNLOAD_REQUIRE_VERSION=true # require the recorded current S3 version
+GM_PUBLIC_DOWNLOAD_REQUIRE_ETAG=true    # require the recorded current S3 ETag
 GM_PENDING_FOLDER_ID=<uuid>            # from provision-scan-file-permissions.mjs output
 GM_CLEAN_REVIEW_FOLDER_ID=<uuid>
 GM_PUBLIC_DOWNLOADS_FOLDER_ID=<uuid>

@@ -463,9 +463,10 @@ revocation gate: (a) run `node tools/provision-scan-file-permissions.mjs --dry-r
 --revoke-public-assets`; (b) review the exact legacy-policy removal; (c) rerun without
 `--dry-run` to apply the managed revocation; (d) verify anonymous
 `/assets/<known-test-uuid>` is denied; and (e) verify the custom
-`/gm-library/downloads/:fileId` route still succeeds only for a published, active,
-downloadable, clean file with a current object identity. Any revocation failure is a
-hard no-go. Only after those checks may uploads be enabled and Framer be published.
+`/gm-library/downloads/:fileId` route is denied for every failed gate and succeeds only
+for a published, active, explicitly downloadable, clean file with a current object
+identity. Any revocation failure is a hard no-go. Only after those checks may uploads
+be enabled and Framer be published.
 9. Wire + publish the Framer form (ATTACHMENT_HANDOFF.md).
 
 ## Remaining deploy gates (still required)
@@ -497,10 +498,15 @@ monitor storage growth (optional orphan sweep is a future job).
 
 Repository-side verification completed without deploying the feature:
 
-- 34 Node-based extension tests pass, including document validation, public-download revocation,
+- 34 direct Node-based extension tests pass, including document validation, public-download revocation,
   transaction-bound publish failure, GuardDuty event validation, retry-before-row, duplicate and
   stale delivery, version/ETag mismatch, and threat-positive retention.
-- All five built extensions bundle successfully from tracked lockfiles. `cfn-lint` reports no
+- The local-filesystem HTTP integration suite and the MinIO S3 HTTP integration suite are counted
+  separately. The standard runner reports top-level files/tests and nested subtests; it does not
+  add assertions to the test total. The MinIO suite is the required proof for current-version,
+  stale-version, stale-ETag, missing-version policy, missing-ETag, HeadObject failure, and delete
+  marker behavior. It uses disposable credentials and a temporary bucket only.
+- All six built extensions bundle successfully from tracked lockfiles. `cfn-lint` reports no
   findings and AWS `cloudformation validate-template` succeeds with `CAPABILITY_NAMED_IAM`.
 - The authorized production inspection was read-only and sanitized: three managed root folders
   exist, the file count is zero, the temporary marker-user queries returned zero, two users match
@@ -515,5 +521,48 @@ Repository-side verification completed without deploying the feature:
 
 No production file, user, permission, record, migration, AWS resource, Render variable, or Framer
 publication was changed by this corrective task. Live Directus startup, disposable Postgres,
-Docker-image startup, GuardDuty scan, and role-by-role post-deployment smoke tests remain live
-deployment gates.
+Docker-image startup, and role-by-role post-deployment smoke tests remain live deployment gates.
+GuardDuty itself is not emulated by the MinIO suite; the deployed AWS GuardDuty scan and event
+delivery test remain live-only deployment gates.
+
+## Focused final verification pass (2026-07-31)
+
+The disposable verification is intentionally split by storage behavior:
+
+- **Local-filesystem HTTP suite:** `GM_REQUIRE_DISABLED=true node tests/run-integration.mjs`
+  runs the enabled upload instance and a separate `GM_PUBLIC_FILE_UPLOADS_ENABLED=false`
+  instance. It covered intake, reviewer, library/download, promotion, and staff-media paths:
+  63 top-level Node tests, 63 passed, 0 failed, 0 skipped.
+- **MinIO S3 HTTP suite:** `GM_REQUIRE_MINIO=true node tests/run-integration.mjs` runs the
+  actual request-time route through Directus's S3 adapter against
+  `minio/minio:RELEASE.2024-12-18T13-15-44Z`, with versioning and a generated disposable
+  bucket. It covered 1 top-level suite plus 8 nested cases, 9 reported Node tests, 9 passed,
+  0 failed, 0 skipped. The version-mismatch and ETag-mismatch cases are here rather than in
+  the local-filesystem suite because they require real `HeadObject` identities.
+- **Unit tests:** the direct Node command reports 34 tests, 34 passed, 0 failed, 0 skipped.
+- **GuardDuty:** no GuardDuty behavior is emulated locally. Live scan-result delivery,
+  tagging, and AWS event workflow remain deployment-only gates.
+
+The earlier 62-versus-81 report used two counting models. The 62 was the combined pass count:
+23 intake + 30 aggregate reviewer/library/staff checks + 9 promotion. The reported 16
+library/download and 3 staff-media values were subsets of that 30, so adding them again
+produced 81. The current report keeps top-level tests, nested subtests, and assertions
+separate; `node:test` does not report assertion totals, and these suites do not maintain a
+separate assertion counter.
+
+The intake route buffers uploaded files before calling Directus `FilesService`: it is not a
+stream-to-storage path. With the default public limits, the maximum is 15 MiB per file, 5
+files per request, and 50 MiB of attachment bytes per request. `Buffer.concat` can transiently
+duplicate the current file during assembly, so the attachment-buffer ceiling is approximately
+65 MiB at that instant (50 MiB retained request buffers plus one 15 MiB current-file copy),
+excluding Node, Busboy, Directus, and request-object overhead. The route returns no storage
+identity, S3 key, or downloadable UUID in failure responses.
+
+The anonymous `/assets` revocation remains a mandatory no-go gate. Before upload enablement,
+public file creation, or Framer publication: run
+`node tools/provision-scan-file-permissions.mjs --dry-run --revoke-public-assets`, review the
+exact removal, apply it, verify anonymous `/assets/<test-file-id>` is denied, verify every
+failed request-time download gate is denied, and verify only a current, clean, published,
+active, explicitly downloadable file succeeds. Any revocation or verification failure stops
+the deployment. No production Directus, AWS, Render, Neon, or Framer change was made in this
+focused pass.

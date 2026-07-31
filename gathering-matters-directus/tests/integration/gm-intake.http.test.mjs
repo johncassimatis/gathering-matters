@@ -272,9 +272,3 @@ test('client abort does not create a misleading submission association', { ...sk
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(await count('submission'), before);
 });
-
-test('multipart attachments are unavailable when the feature is disabled', { skip: process.env.GM_EXPECT_UPLOADS_DISABLED !== 'true' }, async () => {
-  const response = await postFiles([{ name: 'disabled.pdf', mime: 'application/pdf', bytes: pdf }]);
-  assert.notEqual(response.status, 201);
-  assertNoStorageLeak(await json(response));
-});

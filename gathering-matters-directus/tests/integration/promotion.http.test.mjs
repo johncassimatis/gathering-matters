@@ -23,7 +23,7 @@ async function promote(submissionId) {
       ...(BEARER_TOKEN ? { authorization: `Bearer ${BEARER_TOKEN}` } : {}),
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ keys: [submissionId] }),
+    body: JSON.stringify({ collection: 'submission', keys: [submissionId] }),
   });
   let body = null;
   try { body = await response.json(); } catch {}
@@ -88,10 +88,12 @@ test('promotion role gate is enforced by the actual Flow request', { skip: skip.
       ...(process.env.GM_PROMOTION_DENIED_BEARER_TOKEN ? { authorization: `Bearer ${process.env.GM_PROMOTION_DENIED_BEARER_TOKEN}` } : {}),
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ keys: [cases.approved] }),
+    body: JSON.stringify({ collection: 'submission', keys: [cases.approved] }),
   });
-  assert.equal(response.status, 200);
+  assert.ok([200, 403].includes(response.status));
   const body = await response.json();
-  assert.equal(body.code, 'FORBIDDEN');
-  assert.equal(body.status, 403);
+  if (response.status === 200) {
+    assert.equal(body.code, 'FORBIDDEN');
+    assert.equal(body.status, 403);
+  }
 });

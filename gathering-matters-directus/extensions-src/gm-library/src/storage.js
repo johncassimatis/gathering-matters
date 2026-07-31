@@ -46,17 +46,31 @@ export async function streamStoredFile({ env, file, scan, res }) {
     const credentials = env.STORAGE_S3_KEY && env.STORAGE_S3_SECRET
       ? { accessKeyId: env.STORAGE_S3_KEY, secretAccessKey: env.STORAGE_S3_SECRET }
       : undefined;
+    const endpoint = env.STORAGE_S3_ENDPOINT || process.env.STORAGE_S3_ENDPOINT;
+    const forcePathStyle = env.STORAGE_S3_FORCE_PATH_STYLE === true || env.STORAGE_S3_FORCE_PATH_STYLE === 'true'
+      || process.env.STORAGE_S3_FORCE_PATH_STYLE === 'true';
     const client = new S3Client({
       region: env.STORAGE_S3_REGION || 'us-west-2',
+      ...(endpoint ? { endpoint } : {}),
+      ...(forcePathStyle ? { forcePathStyle: true } : {}),
       ...(credentials ? { credentials } : {}),
     });
     const key = s3Key(env, scan, file);
     const current = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
     const currentEtag = current.ETag == null ? null : String(current.ETag).replace(/^"|"$/g, '');
-    if (scan?.object_version_id && current.VersionId && scan.object_version_id !== current.VersionId) {
+    const requireVersion = env.GM_PUBLIC_DOWNLOAD_REQUIRE_VERSION === undefined
+      ? true
+      : env.GM_PUBLIC_DOWNLOAD_REQUIRE_VERSION === true || env.GM_PUBLIC_DOWNLOAD_REQUIRE_VERSION === 'true';
+    const requireEtag = env.GM_PUBLIC_DOWNLOAD_REQUIRE_ETAG === undefined
+      ? true
+      : env.GM_PUBLIC_DOWNLOAD_REQUIRE_ETAG === true || env.GM_PUBLIC_DOWNLOAD_REQUIRE_ETAG === 'true';
+    if (requireVersion && (!scan?.object_version_id || !current.VersionId || scan.object_version_id !== current.VersionId)) {
       throw new Error('stored object version is no longer current');
     }
-    if (scan?.etag && currentEtag && String(scan.etag).replace(/^"|"$/g, '') !== currentEtag) {
+    if (scan?.object_version_id && (!current.VersionId || scan.object_version_id !== current.VersionId)) {
+      throw new Error('stored object version is no longer current');
+    }
+    if (requireEtag && (!scan?.etag || !currentEtag || String(scan.etag).replace(/^"|"$/g, '') !== currentEtag)) {
       throw new Error('stored object etag is no longer current');
     }
     const response = await client.send(new GetObjectCommand({
