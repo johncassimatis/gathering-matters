@@ -1,0 +1,20 @@
+{
+  "name": "directus-extension-gm-publish-gate",
+  "version": "1.0.0",
+  "type": "module",
+  "keywords": ["directus", "directus-extension", "directus-extension-hook"],
+  "directus:extension": {
+    "type": "hook",
+    "path": "dist/index.js",
+    "source": "src/index.js",
+    "host": "^12.0.0"
+  },
+  "scripts": {
+    "build": "directus-extension build",
+    "dev": "directus-extension build -w --no-minify",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@directus/extensions-sdk": "12.0.2"
+  }
+}

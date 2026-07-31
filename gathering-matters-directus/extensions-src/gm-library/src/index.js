@@ -325,14 +325,29 @@ export default {
           .orderBy('t.dimension')
           .orderBy('t.name');
 
-        const files = await db('content_item_file')
-          .where('content_item_id', item.id)
-          .where('is_download', true)
-          .select('directus_file_id', 'label', 'sort')
-          .orderBy('sort')
-          .orderBy('id');
+        // Scan-gating (GM_SCAN_GATING_ENABLED): a downloadable file is returned only
+        // when its content is published (already filtered above), is_download is true,
+        // AND its malware scan is NO_THREATS_FOUND. Files without a scan record are
+        // withheld (fail closed). When the flag is OFF, behaviour is unchanged so
+        // existing published downloads are not hidden.
+        const scanGating = env.GM_SCAN_GATING_ENABLED === true || env.GM_SCAN_GATING_ENABLED === 'true';
 
-        return res.json({ data: { ...item, tags, files } });
+        let filesQ = db('content_item_file as cif')
+          .where('cif.content_item_id', item.id)
+          .where('cif.is_download', true);
+        if (scanGating) {
+          filesQ = filesQ.join('file_scan as fs', 'fs.directus_file_id', 'cif.directus_file_id').where('fs.scan_status', 'NO_THREATS_FOUND');
+        }
+        const files = await filesQ.select('cif.directus_file_id as directus_file_id', 'cif.label as label', 'cif.sort as sort').orderBy('cif.sort').orderBy('cif.id');
+
+        // Gate the featured image the same way when scan-gating is on.
+        let featured_image_id = item.featured_image_id;
+        if (scanGating && featured_image_id) {
+          const clean = await db('file_scan').where('directus_file_id', featured_image_id).where('scan_status', 'NO_THREATS_FOUND').first('directus_file_id');
+          if (!clean) featured_image_id = null;
+        }
+
+        return res.json({ data: { ...item, featured_image_id, tags, files } });
       } catch (err) {
         logger.error(err, 'gm-library/items failed');
         return res.status(500).json({ error: 'detail_failed' });
