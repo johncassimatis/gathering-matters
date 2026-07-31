@@ -173,6 +173,12 @@ export default {
         const requestedTestRunId = req.headers['x-gm-test-run-id'];
         const testRunId = env.GM_TEST_MODE === true || env.GM_TEST_MODE === 'true'
           ? (isUuid(requestedTestRunId) ? requestedTestRunId : null) : null;
+        const injectedFailure = (env.GM_TEST_MODE === true || env.GM_TEST_MODE === 'true')
+          ? String(req.headers['x-gm-test-failure'] || '')
+          : '';
+        const failIf = (stage) => {
+          if (injectedFailure === stage) throw new Error(`GM_TEST_MODE injected failure: ${stage}`);
+        };
 
         const ip = getRequestIp(req);
         const ipHash = ip ? hmacHex(secret, ip) : null;
@@ -222,6 +228,7 @@ export default {
 
         // ---- store files into the Pending folder (no role can read that folder) ----
         if (uploads.length) {
+          failIf('files_upload');
           const schema = await getSchema();
            // The public request must not inherit public Directus collection
            // permissions for the storage write. This is a narrow, server-side
@@ -235,6 +242,10 @@ export default {
             storedFileIds.push(fileId); up.fileId = fileId;
           }
         }
+
+        // Test-only failure point: proves that files written before the database
+        // transaction are cleaned up if the submission cannot be persisted.
+        failIf('submission_insert');
 
         const contactConsentFields = (hasContactInfo && consentToContact)
           ? { contact_consent: true, contact_consent_at: db.fn.now(), contact_consent_notice_version: contactNoticeVersion }
@@ -254,6 +265,8 @@ export default {
             date_created: trx.fn.now(), date_updated: trx.fn.now(),
           }).returning(['id']);
 
+          failIf('submission_insert_after');
+
           await trx('risk_event').insert({
             submission_id: inserted.id, event_type: 'submission_received',
             ip_hash: ipHash, user_agent: userAgent, request_fingerprint: fingerprint,
@@ -269,6 +282,7 @@ export default {
               identityById.set(key.id, await readObjectIdentity(env, storageLocation, key.filename_disk));
             }
             await trx('submission_file').insert(uploads.map((up, i) => ({ submission_id: inserted.id, directus_file_id: up.fileId, label: up.safeName, sort: i })));
+            failIf('submission_file_insert');
             await trx('file_scan').insert(uploads.map((up) => ({
               directus_file_id: up.fileId, origin: 'PUBLIC_SUBMISSION', object_key: identityById.get(up.fileId)?.objectKey || keyById.get(up.fileId) || null,
               bucket: identityById.get(up.fileId)?.bucket || null,
@@ -276,6 +290,8 @@ export default {
               etag: identityById.get(up.fileId)?.etag || null,
               scan_status: 'PENDING', created_at: trx.fn.now(), updated_at: trx.fn.now(),
             })));
+            failIf('cleanup');
+            failIf('file_scan_insert');
           }
           return inserted.id;
         });
@@ -291,7 +307,10 @@ export default {
       } catch (error) {
         // Orphan cleanup: remove any files stored before a later failure.
         if (storedFileIds.length && filesService) {
-          for (const id of storedFileIds) { try { await filesService.deleteOne(id); } catch (e) { logger.error(e, `gm-intake: failed to clean up orphaned file ${id}`); } }
+          for (const id of storedFileIds) {
+            try { failIf('cleanup'); await filesService.deleteOne(id); }
+            catch (e) { logger.error(e, `gm-intake: failed to clean up orphaned file ${id}`); }
+          }
         }
         const code = error.code;
         if (code === 'INVALID_REQUEST' || code === 'VALIDATION_FAILED' || code === 'PAYLOAD_TOO_LARGE' || code === 'RATE_LIMITED') return next(error);

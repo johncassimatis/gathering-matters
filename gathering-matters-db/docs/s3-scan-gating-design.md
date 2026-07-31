@@ -458,7 +458,15 @@ output), `GM_GUARDDUTY_SCAN_QUEUE_URL` (stack output), `GM_SCAN_EXPECTED_ACCOUNT
 Render window. 5. Deploy the rebuilt extensions with all flags OFF. 6. Do the **read-after-write
 confirmation** (upload one benign doc; confirm it succeeds). 7. Flip flags on:
 `GM_SCAN_CONSUMER_ENABLED`, `GM_SCAN_GATING_ENABLED`, then `GM_PUBLIC_FILE_UPLOADS_ENABLED`.
-8. Wire + publish the Framer form (ATTACHMENT_HANDOFF.md).
+8. Before upload activation or any Framer publication, run the mandatory public-asset
+revocation gate: (a) run `node tools/provision-scan-file-permissions.mjs --dry-run
+--revoke-public-assets`; (b) review the exact legacy-policy removal; (c) rerun without
+`--dry-run` to apply the managed revocation; (d) verify anonymous
+`/assets/<known-test-uuid>` is denied; and (e) verify the custom
+`/gm-library/downloads/:fileId` route still succeeds only for a published, active,
+downloadable, clean file with a current object identity. Any revocation failure is a
+hard no-go. Only after those checks may uploads be enabled and Framer be published.
+9. Wire + publish the Framer form (ATTACHMENT_HANDOFF.md).
 
 ## Remaining deploy gates (still required)
 AWS Paid-plan upgrade; live GuardDuty scan test (clean + EICAR only with explicit approval); the
