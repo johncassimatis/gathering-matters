@@ -327,6 +327,36 @@ export const MESSAGES = {
     server: "We couldn't submit your response right now. Please try again.",
     validationFallback:
         "Please review the highlighted fields and try again.",
+    // Neutral confirmation when an attachment is included. No "malware" wording.
+    attachmentPending:
+        "Your submission was received. Any attached document is being checked before review.",
+    attachmentUnsupported:
+        "That file type isn't supported. Please attach a PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), or plain text (.txt) file.",
+    attachmentTooLarge: "That file is too large. Please attach a file under the size limit shown.",
+}
+
+// --- public document attachment allowlist (client-side UX only) -------------
+// The BACKEND (gm-intake) is authoritative and re-validates every file, including
+// content signatures; these are only for a friendly picker + early error. Images,
+// CSV, OpenDocument, legacy/macro Office, archives, executables, scripts, and HTML
+// are intentionally NOT offered here.
+export const GM_UPLOAD_ACCEPT = ".pdf,.docx,.pptx,.xlsx,.txt"
+export const GM_UPLOAD_EXTS = ["pdf", "docx", "pptx", "xlsx", "txt"] as const
+export const GM_UPLOAD_MAX_BYTES = 15 * 1024 * 1024 // keep in sync with GM_PUBLIC_UPLOAD_MAX_BYTES
+export const GM_UPLOAD_MAX_FILES = 5
+
+export function formatBytes(n: number): string {
+    if (n >= 1024 * 1024) return `${Math.round(n / (1024 * 1024))} MB`
+    return `${Math.round(n / 1024)} KB`
+}
+
+// Client-side pre-check. Returns null when acceptable, else a user message.
+export function validateAttachmentClient(file: File): string | null {
+    const ext = (file.name.split(".").pop() || "").toLowerCase()
+    if (!(GM_UPLOAD_EXTS as readonly string[]).includes(ext)) return MESSAGES.attachmentUnsupported
+    if (file.size === 0) return MESSAGES.attachmentUnsupported
+    if (file.size > GM_UPLOAD_MAX_BYTES) return MESSAGES.attachmentTooLarge
+    return null
 }
 
 // --- field validators -------------------------------------------------------
