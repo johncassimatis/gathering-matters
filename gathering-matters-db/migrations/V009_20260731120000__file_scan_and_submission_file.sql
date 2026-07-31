@@ -57,6 +57,7 @@ CREATE TABLE file_scan (
     etag              text,
 
     -- Scan projection.
+    origin           text NOT NULL DEFAULT 'STAFF_MANAGED',
     scan_status       text NOT NULL DEFAULT 'PENDING',
     guardduty_event_id text,
     event_time        timestamptz,       -- source event time; used to reject stale/duplicate events
@@ -78,13 +79,39 @@ CREATE TABLE file_scan (
         'UNSUPPORTED',
         'ACCESS_DENIED',
         'FAILED'
-    ))
+    )),
+
+    -- Public-submitted documents are permanently distinct from future trusted
+    -- staff media.  This prevents a folder move or manual association from
+    -- turning an anonymous upload into a featured image or bypassing the
+    -- document-specific scan workflow.
+    CONSTRAINT file_scan_origin_check CHECK (origin IN ('PUBLIC_SUBMISSION', 'STAFF_MANAGED'))
 );
 COMMENT ON TABLE file_scan IS
     'Database projection of GuardDuty Malware Protection scan status per directus_files object. The S3 GuardDutyMalwareScanStatus tag is authoritative on the AWS side; this row drives Directus gating. Only NO_THREATS_FOUND is releasable; every other value (and PENDING/absent) fails closed. Internal object_key/bucket/version/etag are consumer-only and must not be exposed publicly.';
 
 COMMENT ON COLUMN file_scan.event_time IS
     'Source scan-event time. The consumer must ignore an event whose time is not newer than this (stale/duplicate rejection).';
+
+COMMENT ON COLUMN file_scan.origin IS
+    'Immutable classification of the workflow that created the file. PUBLIC_SUBMISSION files are document-download candidates only; STAFF_MANAGED files use the separate trusted media workflow.';
+
+CREATE OR REPLACE FUNCTION reject_file_scan_origin_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.origin IS DISTINCT FROM OLD.origin THEN
+        RAISE EXCEPTION 'file_scan.origin is immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_file_scan_origin_immutable
+    BEFORE UPDATE ON file_scan
+    FOR EACH ROW
+    EXECUTE FUNCTION reject_file_scan_origin_change();
 
 -- Fast "is this file clean?" lookups for gating.
 CREATE INDEX idx_file_scan_clean ON file_scan (directus_file_id) WHERE scan_status = 'NO_THREATS_FOUND';

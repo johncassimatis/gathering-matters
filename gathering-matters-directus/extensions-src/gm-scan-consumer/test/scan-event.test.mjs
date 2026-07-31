@@ -1,7 +1,7 @@
 // Pure unit tests for the scan-event logic. No AWS/Directus. Run: node --test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateScanEvent, decideAction } from '../src/scan-event.js';
+import { evaluateScanEvent, decideAction, normalizeObjectKey } from '../src/scan-event.js';
 
 const CFG = { account: '025452941754', region: 'us-west-2', bucket: 'gathering-matters-directus-media-025452941754-us-west-2' };
 const ev = (status, over = {}) => ({
@@ -15,14 +15,14 @@ const ev = (status, over = {}) => ({
 test('valid clean event parses and releases to review', () => {
   const r = evaluateScanEvent(ev('NO_THREATS_FOUND'), CFG);
   assert.equal(r.valid, true); assert.equal(r.status, 'NO_THREATS_FOUND'); assert.equal(r.objectKey, 'abc.pdf');
-  const d = decideAction({ scan_status: 'PENDING', guardduty_event_id: null, event_time: null }, r);
+  const d = decideAction({ scan_status: 'PENDING', guardduty_event_id: null, event_time: null, object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'e1' }, r);
   assert.equal(d.action, 'apply'); assert.equal(d.release, true);
 });
 
 test('non-clean statuses apply but never release', () => {
   for (const s of ['THREATS_FOUND', 'UNSUPPORTED', 'ACCESS_DENIED', 'FAILED']) {
     const r = evaluateScanEvent(ev(s), CFG); assert.equal(r.valid, true);
-    const d = decideAction({ scan_status: 'PENDING' }, r);
+    const d = decideAction({ scan_status: 'PENDING', object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'e1' }, r);
     assert.equal(d.action, 'apply'); assert.equal(d.release, false, `${s} must not release`);
   }
 });
@@ -50,24 +50,36 @@ test('rejects malformed / non-object events', () => {
 
 test('duplicate event id is ignored', () => {
   const r = evaluateScanEvent(ev('NO_THREATS_FOUND'), CFG);
-  const d = decideAction({ scan_status: 'PENDING', guardduty_event_id: 'evt-1', event_time: '2026-07-31T12:00:00Z' }, r);
+  const d = decideAction({ scan_status: 'PENDING', guardduty_event_id: 'evt-1', event_time: '2026-07-31T12:00:00Z', object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'e1' }, r);
   assert.equal(d.action, 'ignore-duplicate');
 });
 
 test('stale event (not newer) is ignored', () => {
   const r = evaluateScanEvent(ev('NO_THREATS_FOUND', { id: 'evt-2', time: '2026-07-31T11:00:00Z' }), CFG);
-  const d = decideAction({ scan_status: 'NO_THREATS_FOUND', guardduty_event_id: 'evt-1', event_time: '2026-07-31T12:00:00Z' }, r);
+  const d = decideAction({ scan_status: 'NO_THREATS_FOUND', guardduty_event_id: 'evt-1', event_time: '2026-07-31T12:00:00Z', object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'e1' }, r);
   assert.equal(d.action, 'ignore-stale');
 });
 
 test('newer event applies over an older one', () => {
   const r = evaluateScanEvent(ev('THREATS_FOUND', { id: 'evt-3', time: '2026-07-31T13:00:00Z' }), CFG);
-  const d = decideAction({ scan_status: 'NO_THREATS_FOUND', guardduty_event_id: 'evt-1', event_time: '2026-07-31T12:00:00Z' }, r);
+  const d = decideAction({ scan_status: 'NO_THREATS_FOUND', guardduty_event_id: 'evt-1', event_time: '2026-07-31T12:00:00Z', object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'e1' }, r);
   assert.equal(d.action, 'apply'); assert.equal(d.release, false);
 });
 
 test('no existing file_scan row fails closed (no release)', () => {
   const r = evaluateScanEvent(ev('NO_THREATS_FOUND'), CFG);
   const d = decideAction(null, r);
-  assert.equal(d.action, 'ignore-no-record'); assert.equal(d.release, false);
+  assert.equal(d.action, 'retry-no-record'); assert.equal(d.release, false);
+});
+
+test('URL-encoded keys are normalized exactly once', () => {
+  assert.equal(normalizeObjectKey('public%2Fsubmission%2Fhello%20world.pdf'), 'public/submission/hello world.pdf');
+  assert.equal(normalizeObjectKey('public%252Fsubmission%252Fliteral.pdf'), 'public%2Fsubmission%2Fliteral.pdf');
+  assert.equal(normalizeObjectKey('%E0%A4%A'), null);
+});
+
+test('version and ETag mismatches cannot update the current file row', () => {
+  const r = evaluateScanEvent(ev('NO_THREATS_FOUND'), CFG);
+  assert.equal(decideAction({ object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v-old', etag: 'e1' }, r).action, 'ignore-object-mismatch');
+  assert.equal(decideAction({ object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'different' }, r).action, 'ignore-object-mismatch');
 });

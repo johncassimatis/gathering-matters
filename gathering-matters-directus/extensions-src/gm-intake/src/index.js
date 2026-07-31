@@ -15,6 +15,7 @@
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import busboy from 'busboy';
+import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createError } from '@directus/errors';
 import { validateDocument, FileRejected } from './file-validation.js';
 
@@ -37,6 +38,40 @@ const FOLLOW_UP_REQUIRED_SOURCES = new Set(['young_adult_initiative']);
 const DEFAULT_MAX_FILES = 5;
 const DEFAULT_MAX_FILE_BYTES = 15 * 1024 * 1024;  // 15 MB per document
 const DEFAULT_MAX_TOTAL_BYTES = 50 * 1024 * 1024; // 50 MB per submission
+
+function s3KeyFor(env, filenameDisk) {
+  const root = String(env.STORAGE_S3_ROOT || '').replace(/^\/+|\/+$/g, '');
+  const key = String(filenameDisk || '').replace(/^\/+/, '');
+  return root ? `${root}/${key}` : key;
+}
+
+function normalizeEtag(value) {
+  return value == null ? null : String(value).replace(/^"|"$/g, '');
+}
+
+async function readObjectIdentity(env, storageLocation, filenameDisk) {
+  if (storageLocation !== 's3') return { bucket: null, objectKey: filenameDisk || null, objectVersionId: null, etag: null };
+
+  const bucket = String(env.STORAGE_S3_BUCKET || '').trim();
+  const region = String(env.STORAGE_S3_REGION || 'us-west-2');
+  if (!bucket) throw new Error('STORAGE_S3_BUCKET is not configured');
+
+  const credentials = env.STORAGE_S3_KEY && env.STORAGE_S3_SECRET
+    ? { accessKeyId: env.STORAGE_S3_KEY, secretAccessKey: env.STORAGE_S3_SECRET }
+    : undefined;
+  const client = new S3Client({ region, ...(credentials ? { credentials } : {}) });
+  const head = await client.send(new HeadObjectCommand({
+    Bucket: bucket,
+    Key: s3KeyFor(env, filenameDisk),
+  }));
+
+  return {
+    bucket,
+    objectKey: s3KeyFor(env, filenameDisk),
+    objectVersionId: head.VersionId ?? null,
+    etag: normalizeEtag(head.ETag),
+  };
+}
 
 const normalizeTitle = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
 function normalizeBody(v) {
@@ -66,12 +101,17 @@ function parseMultipart(req, { maxFiles, maxFileBytes, maxTotalBytes }) {
       bb = busboy({ headers: req.headers, limits: { files: maxFiles, fileSize: maxFileBytes, fields: 40, fieldSize: 1024 * 1024, parts: maxFiles + 60 } });
     } catch (err) { reject(err); return; }
     const fields = {}; const files = [];
-    const flags = { tooManyFiles: false, oversizeFile: false, totalExceeded: false };
+    const flags = { tooManyFiles: false, oversizeFile: false, totalExceeded: false, unexpectedFile: false };
     let total = 0, pending = 0, finished = false;
     const done = () => { if (finished && pending === 0) resolve({ fields, files, flags }); };
     bb.on('field', (name, val) => { fields[name] = val; });
     bb.on('filesLimit', () => { flags.tooManyFiles = true; });
     bb.on('file', (name, stream, info) => {
+      if (name !== 'attachments') {
+        flags.unexpectedFile = true;
+        stream.resume();
+        return;
+      }
       pending += 1; const chunks = []; let truncated = false;
       stream.on('data', (c) => { total += c.length; if (total > maxTotalBytes) flags.totalExceeded = true; if (!flags.totalExceeded) chunks.push(c); });
       stream.on('limit', () => { truncated = true; flags.oversizeFile = true; });
@@ -79,6 +119,7 @@ function parseMultipart(req, { maxFiles, maxFileBytes, maxTotalBytes }) {
       stream.on('error', (e) => reject(e));
     });
     bb.on('error', (e) => reject(e));
+    req.once('aborted', () => reject(new Error('request aborted')));
     bb.on('close', () => { finished = true; done(); });
     req.pipe(bb);
   });
@@ -106,7 +147,7 @@ export default {
         const storageLocation = String(env.STORAGE_LOCATIONS || 'local').split(',')[0].trim() || 'local';
 
         // ---- read fields (+ files only when the feature is on) ----
-        let raw = {}; let uploads = []; let pf = { tooManyFiles: false, oversizeFile: false, totalExceeded: false };
+        let raw = {}; let uploads = []; let pf = { tooManyFiles: false, oversizeFile: false, totalExceeded: false, unexpectedFile: false };
         if (uploadsEnabled && req.is('multipart/form-data')) {
           if (!isUuid(pendingFolderId)) throw new SubmissionError({ reason: 'GM_PENDING_FOLDER_ID is not configured' });
           let parsed;
@@ -173,6 +214,7 @@ export default {
         if (pf.oversizeFile) throw new PayloadTooLargeError({ reason: `a file exceeds ${maxFileBytes} bytes` });
         if (pf.totalExceeded) throw new PayloadTooLargeError({ reason: `attachments exceed ${maxTotalBytes} bytes total` });
         if (pf.tooManyFiles || uploads.length > maxFiles) throw new ValidationError({ reason: `max ${maxFiles} attachments` });
+        if (pf.unexpectedFile) throw new ValidationError({ reason: 'files must use the attachments field' });
         for (const up of uploads) {
           try { const v = validateDocument({ filename: up.filename, declaredMime: up.mimeType, buffer: up.buffer, maxBytes: maxFileBytes }); up.mime = v.mime; up.safeName = v.safeName; }
           catch (e) { if (e instanceof FileRejected) throw new ValidationError({ reason: `attachment rejected: ${e.reason}` }); throw e; }
@@ -181,7 +223,11 @@ export default {
         // ---- store files into the Pending folder (no role can read that folder) ----
         if (uploads.length) {
           const schema = await getSchema();
-          filesService = new services.FilesService({ schema, knex: db, accountability: null });
+           // The public request must not inherit public Directus collection
+           // permissions for the storage write. This is a narrow, server-side
+           // process action; the endpoint has already performed the complete
+           // document validation and always places files in Pending.
+           filesService = new services.FilesService({ schema, knex: db, accountability: { admin: true } });
           for (const up of uploads) {
             const fileId = await filesService.uploadOne(Readable.from(up.buffer), {
               storage: storageLocation, filename_download: up.safeName, type: up.mime, title: up.safeName, folder: pendingFolderId,
@@ -218,9 +264,16 @@ export default {
             // Correlate each stored file to its storage key (S3 object key when on S3).
             const keys = await trx('directus_files').whereIn('id', uploads.map((u) => u.fileId)).select('id', 'filename_disk');
             const keyById = new Map(keys.map((k) => [k.id, k.filename_disk]));
+            const identityById = new Map();
+            for (const key of keys) {
+              identityById.set(key.id, await readObjectIdentity(env, storageLocation, key.filename_disk));
+            }
             await trx('submission_file').insert(uploads.map((up, i) => ({ submission_id: inserted.id, directus_file_id: up.fileId, label: up.safeName, sort: i })));
             await trx('file_scan').insert(uploads.map((up) => ({
-              directus_file_id: up.fileId, object_key: keyById.get(up.fileId) || null, bucket: storageLocation,
+              directus_file_id: up.fileId, origin: 'PUBLIC_SUBMISSION', object_key: identityById.get(up.fileId)?.objectKey || keyById.get(up.fileId) || null,
+              bucket: identityById.get(up.fileId)?.bucket || null,
+              object_version_id: identityById.get(up.fileId)?.objectVersionId || null,
+              etag: identityById.get(up.fileId)?.etag || null,
               scan_status: 'PENDING', created_at: trx.fn.now(), updated_at: trx.fn.now(),
             })));
           }
