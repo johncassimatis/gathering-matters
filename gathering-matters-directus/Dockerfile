@@ -15,6 +15,7 @@ COPY extensions-src ./extensions-src
 RUN cd extensions-src/gm-library          && npm ci && npm run build
 RUN cd extensions-src/gm-intake           && npm ci && npm run build
 RUN cd extensions-src/promote-submission  && npm ci && npm run build
+RUN cd extensions-src/gm-scan-consumer    && npm ci && npm run build
 
 FROM directus/directus:12.0.2
 COPY --from=build --chown=node:node /build/extensions-src/gm-library/package.json         /directus/extensions/directus-extension-gm-library/package.json
@@ -23,3 +24,5 @@ COPY --from=build --chown=node:node /build/extensions-src/gm-intake/package.json
 COPY --from=build --chown=node:node /build/extensions-src/gm-intake/dist                   /directus/extensions/directus-extension-gm-intake/dist
 COPY --from=build --chown=node:node /build/extensions-src/promote-submission/package.json  /directus/extensions/directus-extension-promote-submission/package.json
 COPY --from=build --chown=node:node /build/extensions-src/promote-submission/dist          /directus/extensions/directus-extension-promote-submission/dist
+COPY --from=build --chown=node:node /build/extensions-src/gm-scan-consumer/package.json    /directus/extensions/directus-extension-gm-scan-consumer/package.json
+COPY --from=build --chown=node:node /build/extensions-src/gm-scan-consumer/dist            /directus/extensions/directus-extension-gm-scan-consumer/dist

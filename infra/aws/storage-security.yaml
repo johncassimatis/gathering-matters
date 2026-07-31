@@ -1,16 +1,17 @@
 # =============================================================================
-# NOT DEPLOY-READY - blocked on the scan-architecture decision (Option A vs B).
+# OPTION A implemented. NOT YET DEPLOYED.
 #
-# Confirmed from Directus 12.0.2 source: FilesService.uploadOne() reads the just
-# uploaded object during upload (stat() -> HeadObject for every file; images also
-# read() -> GetObject via extractMetadata), BEFORE GuardDuty can tag it. The
-# NoReadUnlessClean deny below therefore BREAKS Directus uploads as written.
-# See gathering-matters-db/docs/s3-scan-gating-design.md sections 2 and 2a.
+# Directus 12.0.2 reads the object during upload (stat()->HeadObject for every
+# file; images also read()->GetObject), before GuardDuty can tag it. Option A
+# therefore EXEMPTS the Directus application identity (and the GuardDuty role)
+# from the clean-file read deny below, so uploads/metadata work; public and
+# ordinary-staff distribution is gated by Directus permissions (see
+# tools/provision-scan-file-permissions.mjs, verified in prod) plus app-layer
+# checks, not by this bucket policy. Directus still cannot set the scan tag.
 #
-# Do NOT deploy until the team picks Option A (exempt the Directus identity from
-# the deny; enforce clean-file gating in the app) or Option B (quarantine bucket).
-# The policy is intentionally left UNCHANGED here (not silently weakened) pending
-# that decision.
+# Remaining deploy gates: AWS Paid-plan upgrade (GuardDuty), a live GuardDuty
+# scan test, and the production role-by-role smoke test. Do NOT deploy or execute
+# a change set until those pass. See docs/s3-scan-gating-design.md sections 2/2a.
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
@@ -183,12 +184,14 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: "false"
-          - Sid: NoReadUnlessClean
+          # Option A: deny reads of not-yet-clean objects to EVERY principal
+          # EXCEPT the GuardDuty scan role and the Directus app identity (which
+          # must read for metadata + serving). Uses Principal:* + ArnNotEquals on
+          # aws:PrincipalArn rather than NotPrincipal. Public/staff distribution
+          # is gated by Directus permissions + app logic, not this statement.
+          - Sid: NoReadUnlessCleanExceptDirectusAndGuardDuty
             Effect: Deny
-            NotPrincipal:
-              AWS:
-                - !Sub "arn:aws:sts::${AWS::AccountId}:assumed-role/${GuardDutyRoleName}/GuardDutyMalwareProtection"
-                - !GetAtt GuardDutyScanRole.Arn
+            Principal: "*"
             Action:
               - s3:GetObject
               - s3:GetObjectVersion
@@ -196,6 +199,10 @@ Resources:
             Condition:
               StringNotEquals:
                 s3:ExistingObjectTag/GuardDutyMalwareScanStatus: NO_THREATS_FOUND
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  - !GetAtt GuardDutyScanRole.Arn
+                  - !GetAtt DirectusAppUser.Arn
           - Sid: OnlyGuardDutyCanTagScanStatus
             Effect: Deny
             NotPrincipal:
@@ -260,6 +267,13 @@ Resources:
                   - s3:AbortMultipartUpload
                   - s3:ListMultipartUploadParts
                 Resource: !Sub "arn:aws:s3:::${MediaBucket}/*"
+              - Sid: ScanQueueConsume
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt ScanResultQueue.Arn
       Tags:
         - Key: Project
           Value: GatheringMatters
@@ -267,6 +281,93 @@ Resources:
           Value: Production
         - Key: ManagedBy
           Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # GuardDuty scan-result delivery: EventBridge -> SQS -> Directus consumer
+  # ---------------------------------------------------------------------------
+  ScanResultDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: gathering-matters-s3-scan-results-dlq
+      MessageRetentionPeriod: 1209600   # 14 days
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ScanResultQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: gathering-matters-s3-scan-results
+      VisibilityTimeout: 90
+      MessageRetentionPeriod: 345600    # 4 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ScanResultDLQ.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # All object scan results (every status) go to the queue for the consumer.
+  ScanResultToQueueRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: gathering-matters-s3-scan-results-to-queue
+      Description: Deliver all GuardDuty Malware Protection S3 object scan results to the consumer queue.
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.guardduty
+        detail-type:
+          - GuardDuty Malware Protection Object Scan Result
+      Targets:
+        - Id: scan-results-queue
+          Arn: !GetAtt ScanResultQueue.Arn
+
+  ScanResultQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref ScanResultQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowOnlyScanResultRuleToSend
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ScanResultQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScanResultToQueueRule.Arn
+
+  ScanDLQNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gathering-matters-s3-scan-dlq-not-empty
+      AlarmDescription: Scan-result messages are dead-lettering; the Directus consumer is not processing them.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ScanResultDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref MalwareAlertsTopic
 
   # ---------------------------------------------------------------------------
   # Malware alerts: SNS topic, email subscription, EventBridge rule
@@ -413,3 +514,12 @@ Outputs:
   BudgetName:
     Description: Monthly cost budget name.
     Value: GatheringMatters-Monthly-AWS-Budget
+  ScanResultQueueUrl:
+    Description: SQS scan-result queue URL (set as GM_GUARDDUTY_SCAN_QUEUE_URL for the consumer).
+    Value: !Ref ScanResultQueue
+  ScanResultQueueArn:
+    Description: SQS scan-result queue ARN.
+    Value: !GetAtt ScanResultQueue.Arn
+  ScanResultDLQArn:
+    Description: Dead-letter queue ARN for scan-result processing failures.
+    Value: !GetAtt ScanResultDLQ.Arn
