@@ -77,3 +77,24 @@ aws s3api get-object-tagging --bucket <bucket> --key <object-key> --region us-we
 - No changes to the running Directus or Render deployment.
 - No migration of existing Directus files into the new bucket.
 - Production Render variables should change only in a planned window with a rollback plan.
+
+
+## Scan-gating env vars (Increments 3-7; all default OFF)
+
+Set these only when activating the feature, in a planned Render window (see the full
+deployment order in `gathering-matters-db/docs/s3-scan-gating-design.md`):
+
+```env
+GM_PUBLIC_FILE_UPLOADS_ENABLED=false   # public document intake (PDF/DOCX/PPTX/XLSX/TXT)
+GM_SCAN_CONSUMER_ENABLED=false         # SQS scan-result consumer (Pending -> Clean Staff Review)
+GM_SCAN_GATING_ENABLED=false           # gm-library + editorial folder gating
+GM_PENDING_FOLDER_ID=<uuid>            # from provision-scan-file-permissions.mjs output
+GM_CLEAN_REVIEW_FOLDER_ID=<uuid>
+GM_PUBLIC_DOWNLOADS_FOLDER_ID=<uuid>
+GM_GUARDDUTY_SCAN_QUEUE_URL=<stack output ScanResultQueueUrl>
+GM_SCAN_EXPECTED_ACCOUNT=025452941754
+```
+
+Flip them on in the order: consumer, gating, then uploads. `false` on any of them
+instantly reverts to current behaviour. The Directus permission layer is applied via
+`tools/provision-scan-file-permissions.mjs` (already applied to prod).

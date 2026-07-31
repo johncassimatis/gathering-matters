@@ -4,6 +4,9 @@
 server into `~/.claude.json`, which requires a **new session** to activate. Resume here from
 **Phase 2** in the next session. Read this whole file first.
 
+> **Update (Increments 1-7 implemented on branch `feat/aws-s3-guardduty-storage`):** Option A is built and unit/prod-tested behind flags (all OFF). The Directus permission layer is applied to prod (authorized); everything else is undeployed. See `gathering-matters-db/docs/s3-scan-gating-design.md` (Implementation status section) for the full status, gates, and rollback.
+
+
 ---
 
 ## CURRENT STATUS / RESUME POINT (updated)

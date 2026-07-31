@@ -348,3 +348,128 @@ Admins (Directus app) see `scan_status` + `scan_status_updated_at` on file rows.
 
 Record `cfn-guard` as a **future CI enhancement** for the CloudFormation template
 (security/compliance policy-as-code), alongside the existing `cfn-lint`. Not installed now.
+
+---
+
+# Implementation status, testing, operations, and deploy gates (Increments 1-7)
+
+Branch `feat/aws-s3-guardduty-storage`. **Nothing is deployed** except the Directus
+permission layer, which was applied to production with explicit owner authorization
+(prod is licensed and holds no real/confidential data). All feature code is behind
+flags that default OFF.
+
+## What each increment delivered
+1. **`V009`** migration: `submission_file` + `file_scan` (one current scan record per
+   file; PENDING fail-closed default). Not applied to production.
+2. **Directus permission layer** (`tools/provision-scan-file-permissions.mjs`): folder-
+   based `directus_files` read gating (Pending / Clean Staff Review / Public Downloads),
+   field-restricted (no `filename_disk`/`storage`). Idempotent, `--dry-run`, `--rollback`.
+3. **`gm-intake` document intake** (flag `GM_PUBLIC_FILE_UPLOADS_ENABLED`, off): PDF/DOCX/
+   PPTX/XLSX/TXT only; bounded PDF-signature + OOXML central-directory validation; stores
+   to Pending folder; records `file_scan` PENDING; exposes no file id/key.
+4. **Scan consumer + Option A CFN** (flag `GM_SCAN_CONSUMER_ENABLED`, off): EventBridge to
+   SQS(+DLQ) to a scheduled consumer; atomic `file_scan` + folder move; a clean result
+   releases only Pending to Clean Staff Review. Bucket policy exempts the Directus identity
+   from the read deny (`ArnNotEquals aws:PrincipalArn`).
+5. **Editorial + gm-library gating** (flag `GM_SCAN_GATING_ENABLED`, off): a file is public
+   only when clean + published + is_download + active; revocation is immediate.
+6. **Framer prep**: allowlist/validation in `gmFormValidation.ts` + `framer/ATTACHMENT_HANDOFF.md`.
+
+## What was tested, and how
+- **In production (licensed, data-free, authorized):** the Directus permission layer -
+  27/27 role-by-role `/assets` + `/files` assertions (Public/Contributor/Moderator/Editor/
+  Publisher), idempotent re-provision (0 duplicates), field restriction. Temporary test
+  users/files were created then deleted.
+- **Disposable Postgres:** `V009` applies; PENDING default, one-per-file UNIQUE, status CHECK.
+- **Mocked unit tests (no live AWS/Directus):** document validator 11/11; scan-event logic
+  9/9 (all statuses, dup/stale/wrong-account/region/bucket/malformed/fail-closed); editorial
+  gate 4/4 (exhaustive truth table incl. the two proofs below).
+- **cfn-lint:** 0 findings on the Option A template.
+
+## The two proofs (Increment 5)
+Exhaustive truth-table tests prove: (a) **editorial approval cannot override a non-clean
+scan** (any non-`NO_THREATS_FOUND` status resolves to Pending, never public), and (b) **a
+clean scan alone cannot create public access** (must also be published + is_download +
+active). The consumer additionally can only move a clean file Pending to Clean Staff Review,
+never to Public Downloads.
+
+## Environment-specific restricted-resource finding (narrow, verified)
+- The **stock disposable Directus 12.0.2** used in testing **rejected filtered permission
+  creation** with `custom_permission_rules_enabled is a restricted resource` (403).
+- The **licensed Gathering Matters production instance accepted** the filtered permission rules.
+- Production was therefore used for the authorized permission tests.
+- This is a narrow, observed finding for these two environments; it is not a general claim
+  that custom permission rules are universally a licensed feature.
+
+## Administrator-level residual risk (accepted)
+A full Directus **administrator bypasses all role permissions** and can manually move a file
+into the Public Downloads folder, bypassing the scan + editorial workflow. This is an accepted
+admin-level residual risk. Production currently has **2 users with Admin Access**; **keep Admin
+Access limited to those two intended trusted users** and audit before activation.
+
+## Other residual risks / limitations
+- The Directus application identity retains technical S3 read permission (Option A) - a
+  compromised Directus process could read pending objects. Accepted.
+- Bounded validation reads a small amount of untrusted input pre-scan (PDF header; OOXML
+  central directory only - never inflated). Accepted.
+- **`NO_THREATS_FOUND` reduces but does not guarantee a file is harmless** - allowed documents
+  may still contain malicious links, social-engineering content, external references, parser
+  exploits, or spreadsheet-formula attacks that malware scanning does not catch.
+- CSV is **excluded** (formula-injection is outside malware-scan guarantees). Images are
+  **excluded from public uploads** (Directus parses images on upload, pre-scan); trusted staff
+  image management is unchanged. OpenDocument excluded (no current requirement).
+- Scan state is eventually consistent with the S3 tag; unknown/stale is treated as not-clean.
+
+## Malware-clean vs editorial publication
+Separate gates. A clean scan only moves a file into Clean Staff Review. Public availability
+additionally requires published content + explicit `is_download` + the Public Downloads state.
+Clean status never publishes a file.
+
+## Admin remediation / rejection / resubmission
+- `THREATS_FOUND`/`FAILED`/`UNSUPPORTED`/`ACCESS_DENIED` files stay in Pending (inaccessible);
+  the SNS alert fires. An authorized admin deletes the object (and versions) and removes the
+  association; do not edit the GuardDuty tag. For `UNSUPPORTED` (e.g. password-protected), ask
+  the submitter for an unprotected replacement.
+- Threat-positive files are NOT auto-deleted initially - kept inaccessible, alert engineering,
+  delete via a controlled procedure.
+
+## Event delivery, retries, DLQ
+EventBridge to SQS (all scan results) to a scheduled consumer (`*/1` default). At-least-once +
+idempotent; visibility timeout 90s; `maxReceiveCount` 5 then dead-letter; a CloudWatch alarm on
+DLQ depth publishes to the SNS topic. Only the EventBridge rule may send to the queue.
+
+## Deployment order (all gated on the AWS Paid-plan upgrade)
+1. Upgrade the AWS account to the Paid plan (GuardDuty). 2. Deploy `infra/aws/storage-security.yaml`
+(change-set review then execute); confirm the MalwareProtectionPlan is ACTIVE and confirm the SNS
+email subscription. 3. Apply `V009` on a branch, then production via the normal Flyway-from-main
+flow. 4. Set the Directus env: `STORAGE_*` (S3), the three folder IDs (from the provisioning
+output), `GM_GUARDDUTY_SCAN_QUEUE_URL` (stack output), `GM_SCAN_EXPECTED_ACCOUNT`, in a planned
+Render window. 5. Deploy the rebuilt extensions with all flags OFF. 6. Do the **read-after-write
+confirmation** (upload one benign doc; confirm it succeeds). 7. Flip flags on:
+`GM_SCAN_CONSUMER_ENABLED`, `GM_SCAN_GATING_ENABLED`, then `GM_PUBLIC_FILE_UPLOADS_ENABLED`.
+8. Wire + publish the Framer form (ATTACHMENT_HANDOFF.md).
+
+## Remaining deploy gates (still required)
+AWS Paid-plan upgrade; live GuardDuty scan test (clean + EICAR only with explicit approval); the
+production role-by-role smoke test (admins bypass, so ordinary-role tokens); confirm Admin Access
+is limited to the 2 trusted users; SNS email confirmation.
+
+## Rollback
+Flags OFF instantly revert behaviour. `node tools/provision-scan-file-permissions.mjs --rollback`
+removes the managed permissions/policies/access (folders left, may hold files). Stack teardown =
+delete the CFN stack (bucket is `RetainExceptOnCreate`). `V009` is additive (tables/columns can
+remain unused). Render storage can revert in the same window.
+
+## Conditions that would require Option B (quarantine bucket)
+No application process may read file contents before scanning; a compliance/legal/insurance/grant
+mandate for true quarantine; anonymous image uploads required; archives/executables/macro-enabled/
+high-risk formats required; high-volume or actively hostile uploads; any component renders/converts/
+previews/thumbnails allowed public documents before scan; `/assets` cannot reliably deny pending
+files for all ordinary roles; scan state cannot be protected from ordinary staff; the event
+workflow cannot fail closed; Admin Access cannot be limited; raw S3/presigned access must be
+exposed pre-scan.
+
+## Maintenance responsibilities after handoff
+Keep the AWS billing account current; rotate the Directus S3 key if exposed; watch the DLQ alarm +
+SNS malware alerts and run the remediation procedure; keep Admin Access to the 2 trusted users;
+monitor storage growth (optional orphan sweep is a future job).
