@@ -6,8 +6,10 @@
 // permissions. A file's FOLDER encodes its release state:
 //   - "Pending Malware Scan"  -> no non-admin role can read it (default; fail closed)
 //   - "Clean Staff Review"    -> only review roles (Moderator/Editor/Publisher)
-//   - "Public Downloads"      -> Public + all staff (a file only lands here after
-//                                GuardDuty NO_THREATS_FOUND *and* editorial approval)
+//   - "Public Downloads"      -> staff may read through authenticated Directus
+//                                permissions. Anonymous document downloads use
+//                                /gm-library/downloads/:fileId so revocation is
+//                                checked against current database state.
 //
 // The scan consumer (Increment 4) and editorial workflow (Increment 5) move files
 // between folders. This script only manages folders + the read permissions.
@@ -24,7 +26,8 @@
 //   * `--dry-run` performs no writes.
 //
 // Env: DIRECTUS_URL, DIRECTUS_ADMIN_TOKEN.
-// Flags: --dry-run | --report | --rollback | --seed-roles (disposable test only)
+// Flags: --dry-run | --report | --rollback | --revoke-public-assets |
+//        --seed-roles (disposable test only)
 //
 // This script must NOT be run against production during the current task. It is
 // meant to be applied later, to production, by an authorized operator, and then
@@ -35,6 +38,7 @@ const TOKEN = process.env.DIRECTUS_ADMIN_TOKEN;
 const DRY = process.argv.includes('--dry-run');
 const REPORT = process.argv.includes('--report');
 const ROLLBACK = process.argv.includes('--rollback');
+const REVOKE_PUBLIC_ASSETS = process.argv.includes('--revoke-public-assets');
 const SEED_ROLES = process.argv.includes('--seed-roles'); // disposable test env only
 
 if (!URL || !TOKEN) {
@@ -47,16 +51,17 @@ const FOLDERS = ['Pending Malware Scan', 'Clean Staff Review', 'Public Downloads
 // Non-sensitive directus_files fields only. Never expose filename_disk/storage/metadata.
 const SAFE_FILE_FIELDS = ['id', 'filename_download', 'title', 'type', 'filesize', 'width', 'height', 'duration'];
 
-// Role -> folders whose files that role may read. Public is special (role=null).
-// A file in "Public Downloads" is already clean AND editorially approved.
+// Role -> folders whose files that role may read. There is deliberately no
+// anonymous directus_files read policy: public documents use the request-time
+// gated gm-library download endpoint. A file in "Public Downloads" is already
+// clean AND editorially approved for authenticated staff access.
 const ACCESS_MATRIX = {
-  Public:      ['Public Downloads'],
   Contributor: ['Public Downloads'],
   Moderator:   ['Clean Staff Review', 'Public Downloads'],
   Editor:      ['Clean Staff Review', 'Public Downloads'],
   Publisher:   ['Clean Staff Review', 'Public Downloads'],
 };
-const REQUIRED_ROLES = ['Contributor', 'Moderator', 'Editor', 'Publisher']; // Public is not a role
+const REQUIRED_ROLES = ['Contributor', 'Moderator', 'Editor', 'Publisher'];
 
 const changes = []; // audit of writes (or would-be writes under --dry-run)
 
@@ -103,6 +108,12 @@ async function main() {
   }
 
   if (ROLLBACK) return rollback(policies, access);
+
+  // The earlier implementation used a managed anonymous policy for Directus
+  // /assets. Remove only that exact managed policy when an operator explicitly
+  // requests the revocation during deployment. The normal provisioning path
+  // never touches it, so a missed flag cannot silently mutate existing access.
+  if (REVOKE_PUBLIC_ASSETS) await revokePublicAssets(policies, access);
 
   // 2. Resolve required roles; stop on missing or ambiguous.
   for (const rn of REQUIRED_ROLES) {
@@ -181,6 +192,25 @@ async function rollback(policies, access) {
     await write(`delete policy ${p.name}`, `/policies/${p.id}`, { method: 'DELETE' });
   }
   console.log(JSON.stringify({ rolled_back: managed.map((p) => p.name), note: 'Managed folders left intact (may contain files).', changes }, null, 2));
+}
+
+async function revokePublicAssets(policies, access) {
+  const publicPolicyName = managedPolicyName('Public');
+  const policy = policies.find((p) => p.name === publicPolicyName);
+  if (!policy) {
+    changes.push({ action: 'revoke public assets', result: 'no managed Public policy found' });
+    return;
+  }
+
+  const permissions = DRY ? [] : await dx(`/permissions?filter[policy][_eq]=${policy.id}&limit=-1&fields=id,collection,action`);
+  for (const permission of permissions) {
+    await write(`delete public asset permission ${permission.id}`, `/permissions/${permission.id}`, { method: 'DELETE' });
+  }
+  for (const a of access.filter((x) => x.policy === policy.id)) {
+    await write(`delete public asset access ${a.id}`, `/access/${a.id}`, { method: 'DELETE' });
+  }
+  await write(`delete public asset policy ${policy.id}`, `/policies/${policy.id}`, { method: 'DELETE' });
+  console.log(JSON.stringify({ revoked_public_assets: true, policy: publicPolicyName, changes }, null, 2));
 }
 
 main().catch((err) => { console.error('PROVISIONING FAILED:', err.message); process.exit(1); });

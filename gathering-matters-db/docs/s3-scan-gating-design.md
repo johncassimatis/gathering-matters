@@ -1,9 +1,8 @@
 # Directus S3 + GuardDuty scan-gating — design
 
-**Status:** design only. No Directus, Render, Framer, or production changes. The AWS
-infrastructure (private bucket, GuardDuty Malware Protection plan, tag-based access
-policy) is prepared in `infra/aws/` but not deployed (account is on the AWS Free plan,
-which blocks GuardDuty until upgraded to Paid).
+**Status:** implementation prepared on `feat/aws-s3-guardduty-storage`; no Directus,
+Render, Framer, AWS, migration, or production changes are authorized by this task. The
+AWS infrastructure is prepared in `infra/aws/` but remains undeployed.
 
 This document specifies how the application should behave once files live in the
 scanned S3 bucket, and — importantly — flags a foundational behavior that must be
@@ -27,18 +26,22 @@ per-file storage routing.
   `directus_files`, linked by `content_item_file` (V004), plus `content_item.featured_image_id`.
 
 **Public download surface (the part that matters):**
-`gm-library` `GET /gm-library/items/:slug` returns, for a published item:
-`featured_image_id` and a `files` array from `content_item_file WHERE is_download = true`
-(`directus_file_id, label, sort`). The Framer frontend resolves those ids to downloads
-through Directus `/assets/{id}`. **This endpoint currently returns file ids regardless of
-scan status.** The public search/card endpoint returns no file fields.
+`gm-library` `GET /gm-library/items/:slug` returns, for a published item, only clean,
+downloadable public-submission links when scan gating is enabled. The browser follows
+`/gm-library/downloads/{fileId}`, a custom request-time route that re-checks publication,
+association, origin, scan state, and (for S3) the recorded object version/ETag before
+streaming. Anonymous Directus `/assets/{id}` access is removed by the deployment-time
+permission revocation step; the public API does not rely on a raw asset URL.
 
-**Authoritative security control (already designed in `infra/aws/`):** the S3 bucket
+**Original bucket-policy assumption (revised by Option A):** the S3 bucket
 policy denies `s3:GetObject`/`GetObjectVersion` for any object not tagged
 `GuardDutyMalwareScanStatus=NO_THREATS_FOUND` (except the GuardDuty role). So a
 not-yet-clean file is genuinely unreadable through `/assets` — Directus's own read is
 denied — **independent of any application code**. Application gating is defense-in-depth
-and UX, not the primary control.
+and UX, not the primary control. The Directus application identity is exempted from
+that deny because Directus reads the object during upload; public safety is therefore
+enforced by the custom request-time route and current database state. A stale or missing
+database value fails closed.
 
 **Test conventions:** `gathering-matters-directus/tests/` — vitest + supertest against a
 live Directus, a `pg` client for seed/cleanup (`run-tests.js`, `cleanup.js`,
@@ -191,10 +194,10 @@ closed — treat unknown as not-clean).
 
 Introduce a `scan_status` on the file-link rows, default `PENDING`:
 
-| Status | Meaning | Public download listed? | `/assets` read (bucket policy) |
+| Status | Meaning | Public download listed? | Custom download route |
 |---|---|---|---|
 | `PENDING` | not yet scanned / unknown | No | Denied |
-| `NO_THREATS_FOUND` | clean | **Yes** | Allowed |
+| `NO_THREATS_FOUND` | clean | **Yes, only with editorial approval** | Allowed |
 | `THREATS_FOUND` | malware | No (neutral "unavailable") | Denied |
 | `UNSUPPORTED` | could not scan | No | Denied |
 | `ACCESS_DENIED` | GuardDuty could not read | No | Denied |
@@ -353,8 +356,8 @@ Record `cfn-guard` as a **future CI enhancement** for the CloudFormation templat
 
 # Implementation status, testing, operations, and deploy gates (Increments 1-7)
 
-Branch `feat/aws-s3-guardduty-storage`. **Nothing is deployed** except the Directus
-permission layer, which was applied to production with explicit owner authorization
+Branch `feat/aws-s3-guardduty-storage`. **Nothing is deployed by this corrective task**;
+  the historical permission layer was applied to production with explicit owner authorization
 (prod is licensed and holds no real/confidential data). All feature code is behind
 flags that default OFF.
 
@@ -362,8 +365,10 @@ flags that default OFF.
 1. **`V009`** migration: `submission_file` + `file_scan` (one current scan record per
    file; PENDING fail-closed default). Not applied to production.
 2. **Directus permission layer** (`tools/provision-scan-file-permissions.mjs`): folder-
-   based `directus_files` read gating (Pending / Clean Staff Review / Public Downloads),
-   field-restricted (no `filename_disk`/`storage`). Idempotent, `--dry-run`, `--rollback`.
+  based authenticated `directus_files` read gating (Pending / Clean Staff Review /
+  Public Downloads), field-restricted (no `filename_disk`/`storage`). Anonymous raw
+  `/assets` access is not provisioned; `--revoke-public-assets` removes the earlier exact
+  managed anonymous policy during deployment. Idempotent, `--dry-run`, `--rollback`.
 3. **`gm-intake` document intake** (flag `GM_PUBLIC_FILE_UPLOADS_ENABLED`, off): PDF/DOCX/
    PPTX/XLSX/TXT only; bounded PDF-signature + OOXML central-directory validation; stores
    to Pending folder; records `file_scan` PENDING; exposes no file id/key.
@@ -372,19 +377,21 @@ flags that default OFF.
    releases only Pending to Clean Staff Review. Bucket policy exempts the Directus identity
    from the read deny (`ArnNotEquals aws:PrincipalArn`).
 5. **Editorial + gm-library gating** (flag `GM_SCAN_GATING_ENABLED`, off): a file is public
-   only when clean + published + is_download + active; revocation is immediate.
+   only when clean + published + is_download + active; revocation is immediate. Public
+   documents use `/gm-library/downloads/:fileId`; trusted staff media uses
+   `/gm-library/media/:fileId`.
 6. **Framer prep**: allowlist/validation in `gmFormValidation.ts` + `framer/ATTACHMENT_HANDOFF.md`.
 
 ## What was tested, and how
-- **In production (licensed, data-free, authorized):** the Directus permission layer -
+- **Historical authorized production check:** the pre-correction Directus permission layer -
   27/27 role-by-role `/assets` + `/files` assertions (Public/Contributor/Moderator/Editor/
-  Publisher), idempotent re-provision (0 duplicates), field restriction. Temporary test
-  users/files were created then deleted.
+  Publisher), idempotent re-provision (0 duplicates), field restriction. This does not
+  validate the corrected custom route or the new public-policy revocation step.
 - **Disposable Postgres:** `V009` applies; PENDING default, one-per-file UNIQUE, status CHECK.
 - **Mocked unit tests (no live AWS/Directus):** document validator 11/11; scan-event logic
   9/9 (all statuses, dup/stale/wrong-account/region/bucket/malformed/fail-closed); editorial
   gate 4/4 (exhaustive truth table incl. the two proofs below).
-- **cfn-lint:** 0 findings on the Option A template.
+- **cfn-lint:** rerun on the corrected Option A template before deployment.
 
 ## The two proofs (Increment 5)
 Exhaustive truth-table tests prove: (a) **editorial approval cannot override a non-clean
@@ -400,6 +407,10 @@ never to Public Downloads.
 - Production was therefore used for the authorized permission tests.
 - This is a narrow, observed finding for these two environments; it is not a general claim
   that custom permission rules are universally a licensed feature.
+
+The stock disposable Directus 12.0.2 environment used during testing rejected filtered
+permission creation with `custom_permission_rules_enabled is a restricted resource`,
+while the licensed Gathering Matters production instance accepted the filtered rules.
 
 ## Administrator-level residual risk (accepted)
 A full Directus **administrator bypasses all role permissions** and can manually move a file
@@ -473,3 +484,28 @@ exposed pre-scan.
 Keep the AWS billing account current; rotate the Directus S3 key if exposed; watch the DLQ alarm +
 SNS malware alerts and run the remediation procedure; keep Admin Access to the 2 trusted users;
 monitor storage growth (optional orphan sweep is a future job).
+
+## Corrective verification record
+
+Repository-side verification completed without deploying the feature:
+
+- 34 Node-based extension tests pass, including document validation, public-download revocation,
+  transaction-bound publish failure, GuardDuty event validation, retry-before-row, duplicate and
+  stale delivery, version/ETag mismatch, and threat-positive retention.
+- All five built extensions bundle successfully from tracked lockfiles. `cfn-lint` reports no
+  findings and AWS `cloudformation validate-template` succeeds with `CAPABILITY_NAMED_IAM`.
+- The authorized production inspection was read-only and sanitized: three managed root folders
+  exist, the file count is zero, the temporary marker-user queries returned zero, two users match
+  the Administrator role, and five managed file-read policies/access links are present.
+- Production also still contains one legacy managed anonymous Public policy and one access link.
+  This is an explicit deployment blocker; the corrective task did not revoke it. Run
+  `node tools/provision-scan-file-permissions.mjs --revoke-public-assets` only in the controlled
+  deployment window after the custom download route is live.
+- The stock disposable Directus 12.0.2 environment used during testing rejected filtered
+  permission creation with `custom_permission_rules_enabled is a restricted resource`, while
+  the licensed Gathering Matters production instance accepted the filtered rules.
+
+No production file, user, permission, record, migration, AWS resource, Render variable, or Framer
+publication was changed by this corrective task. Live Directus startup, disposable Postgres,
+Docker-image startup, GuardDuty scan, and role-by-role post-deployment smoke tests remain live
+deployment gates.

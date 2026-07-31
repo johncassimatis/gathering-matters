@@ -27,10 +27,17 @@ STORAGE_S3_SERVER_SIDE_ENCRYPTION=AES256
 - **Uploads are scanned asynchronously.** After Directus uploads an object, GuardDuty
   Malware Protection for S3 scans it and tags it with `GuardDutyMalwareScanStatus`. Until
   the tag is `NO_THREATS_FOUND`, the bucket policy **denies reads** of that object (to
-  everyone except the GuardDuty role). So a freshly uploaded file may be briefly
-  unreadable (typically seconds to a couple of minutes) until the scan completes.
-- Application code that serves attachments must handle a temporary "not yet available /
-  pending scan" state, and must treat a non-clean object as unavailable.
+  everyone except the GuardDuty and Directus application identities). Public delivery
+  is still blocked by the custom route until the database scan state is clean and the
+  content is editorially published. A freshly uploaded file may be briefly unavailable
+  (typically seconds to a couple of minutes) until the scan completes.
+- Public document attachments are served by `GET /gm-library/downloads/:fileId`, not by
+  anonymous Directus `/assets/:id`. The route rechecks current clean scan state,
+  publication, association, and S3 version/ETag. The deployment operator must run
+  `--revoke-public-assets` to remove the legacy managed anonymous asset policy.
+- Trusted staff-managed featured media is served separately by `/gm-library/media/:fileId`.
+- Reviewers use the authenticated `gm-review` endpoint; it returns neutral `PENDING` /
+  `UNAVAILABLE` states and never exposes S3 keys or GuardDuty diagnostics.
 
 ### Scan-status values (`GuardDutyMalwareScanStatus`)
 
@@ -97,4 +104,5 @@ GM_SCAN_EXPECTED_ACCOUNT=025452941754
 
 Flip them on in the order: consumer, gating, then uploads. `false` on any of them
 instantly reverts to current behaviour. The Directus permission layer is applied via
-`tools/provision-scan-file-permissions.mjs` (already applied to prod).
+`tools/provision-scan-file-permissions.mjs`. Run `--revoke-public-assets` explicitly during
+that deployment window; it has not been run by this task.

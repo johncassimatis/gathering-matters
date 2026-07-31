@@ -209,7 +209,9 @@ Resources:
               AWS:
                 - !Sub "arn:aws:sts::${AWS::AccountId}:assumed-role/${GuardDutyRoleName}/GuardDutyMalwareProtection"
                 - !GetAtt GuardDutyScanRole.Arn
-            Action: s3:PutObjectTagging
+            Action:
+              - s3:PutObjectTagging
+              - s3:PutObjectVersionTagging
             Resource: !Sub "arn:aws:s3:::${MediaBucket}/*"
             Condition:
               "ForAnyValue:StringEquals":
@@ -349,6 +351,8 @@ Resources:
             Condition:
               ArnEquals:
                 aws:SourceArn: !GetAtt ScanResultToQueueRule.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
   ScanDLQNotEmptyAlarm:
     Type: AWS::CloudWatch::Alarm

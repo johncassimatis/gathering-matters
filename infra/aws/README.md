@@ -9,7 +9,11 @@ malware plus cost alerting.
 > reads the uploaded object during upload (`stat()`/`HeadObject` for every file; images also
 > `read()`/`GetObject`) **before** GuardDuty can tag it, so the `NoReadUnlessClean` deny would
 > break Directus uploads. Blocked on the scan-architecture decision (Option A vs Option B) and
-> the AWS Paid-plan upgrade. The policy is intentionally left unchanged (not silently weakened).
+> the AWS Paid-plan upgrade. Option A is now the selected repository architecture: the Directus
+> application identity is exempted from the object-read deny, while anonymous distribution is
+> removed from raw `/assets` and served through `/gm-library/downloads/:fileId`. The policy is
+> not deploy-ready until V009, extension rollout, explicit `--revoke-public-assets`, and live
+> verification are complete.
 > See `gathering-matters-db/docs/s3-scan-gating-design.md` §2 and §2a.
 
 - **Template:** `storage-security.yaml`
@@ -22,7 +26,7 @@ malware plus cost alerting.
 | Resource | Purpose |
 |---|---|
 | `AWS::S3::Bucket` `gathering-matters-directus-media-025452941754-us-west-2` | Private media bucket: BucketOwnerEnforced, all Block Public Access on, SSE-S3 (AES256), versioning, lifecycle (abort incomplete MPU after 7d, expire noncurrent versions after 90d). `DeletionPolicy: RetainExceptOnCreate`, `UpdateReplacePolicy: Retain`. |
-| `AWS::S3::BucketPolicy` | TLS-only deny, plus tag-based access control (TBAC): denies reads unless `GuardDutyMalwareScanStatus=NO_THREATS_FOUND`, and denies anyone except the GuardDuty role from setting that tag. |
+| `AWS::S3::BucketPolicy` | TLS-only deny, plus tag-based access control (TBAC): denies reads unless `GuardDutyMalwareScanStatus=NO_THREATS_FOUND` except the GuardDuty and Directus application identities, and denies anyone except GuardDuty from setting that tag. Public delivery is application-gated. |
 | `AWS::IAM::Role` `gm-guardduty-malware-protection-s3-role` | GuardDuty Malware Protection service role (verbatim AWS-documented least-privilege policy; KMS statement omitted because the bucket is SSE-S3, not KMS). |
 | `AWS::GuardDuty::MalwareProtectionPlan` | Independent Malware Protection plan for the whole bucket, scan-result tagging ENABLED. No detector, no other protection plans. |
 | `AWS::IAM::User` `gm-directus-s3-app` | Directus application identity: no console, no IAM/GuardDuty perms, bucket-scoped S3 only, cannot set the scan tag. |
@@ -33,6 +37,24 @@ malware plus cost alerting.
 The application access key for `gm-directus-s3-app` is **not** in this template. It is
 created separately, once, after deploy and verification, and stored outside the repo
 (see the handoff doc). Never commit secrets.
+
+## Option A application boundary
+
+Directus must be able to perform its upload-time `HeadObject`/metadata reads, so the
+application identity remains technically able to read the private bucket. Public documents
+are not exposed through anonymous `/assets/:id`. When scan gating is enabled:
+
+- `gm-library` lists only `PUBLIC_SUBMISSION` files with `NO_THREATS_FOUND`, published
+  content, and an explicit downloadable association.
+- `/gm-library/downloads/:fileId` repeats those checks at request time and verifies the
+  recorded S3 version/ETag before streaming; revocation invalidates old links.
+- trusted staff-managed featured media uses `/gm-library/media/:fileId` and is classified
+  separately from public submissions.
+- `tools/provision-scan-file-permissions.mjs --revoke-public-assets` removes only the exact
+  earlier managed anonymous policy. It has not been run in this task.
+
+The bucket remains private, blocks direct public access, and protects non-Directus
+principals with the GuardDuty scan tag. Option B is required if true quarantine is mandatory.
 
 ## Prerequisite: account must be on the AWS Paid plan
 

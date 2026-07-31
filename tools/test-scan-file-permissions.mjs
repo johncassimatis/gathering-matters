@@ -78,8 +78,9 @@ async function main() {
     cleanup.users.push(u.id); roleToken[r] = token;
   }
 
-  // Expected /assets access matrix: which principals may read each file
-  // (folder-based: Public Downloads = everyone; Clean Staff Review = review roles; Pending = nobody)
+  // Expected direct /assets access matrix. Anonymous document downloads are
+  // intentionally denied even for Public Downloads; the public route is the
+  // request-time gated /gm-library/downloads/:fileId endpoint.
   const reviewRoles = ['Moderator', 'Editor', 'Publisher'];
   const principals = [['Public', null], ...ROLES.map((r) => [r, roleToken[r]])];
 
@@ -93,8 +94,11 @@ async function main() {
     const revStatus = await statusFor(`/assets/${fileIds.review}`, tok);
     if (reviewRoles.includes(pname)) assert(`/assets review ALLOWED for ${pname}`, OK(revStatus));
     else assert(`/assets review denied for ${pname}`, DENIED(revStatus));
-    // Public Downloads: allowed for everyone
-    assert(`/assets public ALLOWED for ${pname}`, OK(await statusFor(`/assets/${fileIds.public}`, tok)));
+    // Public Downloads: authenticated staff only; anonymous access uses the
+    // custom download endpoint and must not use the raw Directus asset route.
+    const pubStatus = await statusFor(`/assets/${fileIds.public}`, tok);
+    if (pname === 'Public') assert(`/assets public denied for ${pname}`, DENIED(pubStatus));
+    else assert(`/assets public ALLOWED for ${pname}`, OK(pubStatus));
     // Transformation variant follows the same permission (pending must still be denied)
     assert(`/assets pending?transform denied for ${pname}`, DENIED(await statusFor(`/assets/${fileIds.pending}?width=10&height=10`, tok)));
     // Direct /files metadata: pending denied

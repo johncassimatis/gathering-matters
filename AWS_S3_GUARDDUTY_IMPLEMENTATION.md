@@ -4,7 +4,13 @@
 server into `~/.claude.json`, which requires a **new session** to activate. Resume here from
 **Phase 2** in the next session. Read this whole file first.
 
-> **Update (Increments 1-7 implemented on branch `feat/aws-s3-guardduty-storage`):** Option A is built and unit/prod-tested behind flags (all OFF). The Directus permission layer is applied to prod (authorized); everything else is undeployed. See `gathering-matters-db/docs/s3-scan-gating-design.md` (Implementation status section) for the full status, gates, and rollback.
+> **Update (corrective implementation on branch `feat/aws-s3-guardduty-storage`):** Option A is
+> implemented behind flags (all OFF), with request-time public downloads, transaction-bound
+> folder gates, immutable submission origin, SQS retry/DLQ handling, reviewer metadata, and
+> Framer multipart wiring. No migration, AWS, Directus, Render, or Framer deployment was made.
+> The historical production permission check found a legacy managed anonymous `/assets` policy
+> still present; deployment must explicitly run `--revoke-public-assets` after the custom route
+> is deployed. See `gathering-matters-db/docs/s3-scan-gating-design.md` for gates and rollback.
 
 
 ---
