@@ -47,29 +47,127 @@ not yet used here; new mocked tests would be additive.
 
 ---
 
-## 2. FOUNDATIONAL RISK — verify before implementing (read-after-write)
+## 2. CONFIRMED FROM SOURCE — Directus reads the object during upload
 
-The tag-based-access design assumes Directus can **write** an object and defer **reads**
-until the object is clean. That holds only if Directus does not need to read the object
-back immediately after upload. Two places where it might:
+Verified against the exact deployed version, **Directus 12.0.2** (`FROM
+directus/directus:12.0.2` in `gathering-matters-directus/Dockerfile`, the only pin;
+local and Render both build from it):
 
-1. **Image metadata / thumbnail extraction.** Directus extracts dimensions and can
-   generate transforms. If any of that triggers an S3 `GetObject` on the freshly
-   uploaded (untagged) object, the bucket policy **denies it** and the upload or first
-   render fails.
-2. **Any post-upload verification `GET`/`HEAD`** the S3 adapter performs.
+- `FilesService.uploadOne()` (`api/src/services/files.ts`) after writing the stream calls,
+  **unconditionally for every file**:
+  `const { size } = await storage.location(payload.storage).stat(payload.filename_disk);`
+  then `extractMetadata(payload.storage, ...)`.
+- `extractMetadata()` (`api/src/services/files/lib/extract-metadata.ts`) for supported
+  image types does:
+  `const stream = await storage.location(storageLocation).read(data.filename_disk);` and
+  pipes it into `getMetadata()`.
+- S3 driver (`packages/storage-driver-s3/src/index.ts`): `read()` sends
+  `GetObjectCommand`; `stat()` sends `HeadObjectCommand`.
 
-**If Directus performs an immediate post-upload read, the current single-bucket TBAC
-design will break uploads**, and the architecture must change to a **quarantine-bucket
-pattern**: Directus uploads to a quarantine bucket, GuardDuty scans there, and a Lambda
-copies only clean objects into the serving bucket. That is a materially different build.
+**Conclusion (conclusive, source-based):** Directus performs a storage read of the just
+uploaded object **synchronously inside `uploadOne`, before GuardDuty can scan and tag it**
+(GuardDuty scanning is asynchronous and starts only after the PUT). Specifically:
 
-**Therefore:** the very first action once the account is on the Paid plan and the stack
-is deployed is a **single controlled test upload** to determine whether Directus reads
-after write under the TBAC policy. The gating implementation below assumes the
-"no immediate read" (single-bucket) outcome; if the test shows otherwise, switch to the
-quarantine-bucket design first. This is the main reason the gating code is **not** written
-yet — building it now risks being invalidated by this untested behavior.
+- **Images (JPEG/PNG/WebP — all in the gm-intake allowlist):** `extractMetadata` issues a
+  **`GetObject`**. The bucket policy's `NoReadUnlessClean` explicitly denies `s3:GetObject`
+  for the untagged object, so **image uploads fail**. (Certain.)
+- **Every file type:** the post-write `stat()` issues **`HeadObject`, which S3 authorizes
+  via `s3:GetObject`** (there is no separate `s3:HeadObject` IAM action). The same deny
+  therefore also blocks `stat()` on the untagged object, so **non-image uploads (PDF/DOCX)
+  fail at `stat()` as well.** The absent tag makes the `StringNotEquals ... NO_THREATS_FOUND`
+  condition evaluate true (fail-closed), so the deny applies.
+
+> The earlier plan called this a risk to confirm with a live test. **It is now confirmed
+> from source; a live test would only re-confirm it.** The current single-bucket
+> tag-based-deny template is therefore **NOT deploy-ready** as written.
+
+---
+
+## 2a. Architecture decision — Option A vs Option B
+
+Because Directus (the application identity) must read the object immediately after upload,
+the bucket policy cannot deny `s3:GetObject` to the Directus identity. Two ways forward:
+
+### Option A — Public-distribution gating (Directus may read unscanned objects)
+
+- **Bucket policy:** exempt the Directus app identity from `NoReadUnlessClean` (add it to
+  the `NotPrincipal` list beside the GuardDuty role). Directus can then `stat`/`read` any
+  object (scanned or not) for metadata **and** for serving.
+- **Where the clean-file guarantee lives:** since the bucket policy no longer blocks
+  Directus from serving an unscanned object, **public distribution must be gated in the
+  application** — `gm-library` returns only clean files (per §6), and public access to
+  `/assets` must be gated so a public user cannot fetch a non-clean file id. The bucket
+  policy still blocks every *non-Directus* principal (BPA + the deny), so there is no
+  direct-to-S3 public path.
+- **Security tradeoff (state plainly):**
+  1. **Directus itself reads and parses unscanned, potentially-malicious bytes** — for
+     images, sharp/libvips parses the file during `extractMetadata` before any scan. A
+     malicious image exploiting a libvips vulnerability could affect the Directus process.
+     This is a real but low-probability, bounded server-side risk.
+  2. The "no public download until clean" guarantee now depends on **application code**,
+     not the bucket policy. A gating bug could serve a not-clean file. Mitigate with
+     fail-closed gating + tests.
+- **IAM:** unchanged (`gm-directus-s3-app` already has `s3:GetObject/GetObjectVersion`).
+
+### Option B — Pre-processing quarantine (Directus never reads unscanned objects)
+
+- **Flow:** a custom intake path uploads the raw bytes **directly to a quarantine
+  bucket/prefix via the AWS SDK, bypassing Directus `FilesService`** (so no `stat`/`read`
+  on unscanned data). GuardDuty scans the quarantine bucket. A Lambda, on
+  `NO_THREATS_FOUND`, copies the object into the Directus **serving** bucket and creates
+  the `directus_files` record (or triggers a Directus import that now reads a clean
+  object). Non-clean objects are quarantined/deleted, never copied.
+- **Buckets/IAM:** a quarantine bucket (GuardDuty MP plan + tag-based deny target) and a
+  serving bucket (holds only clean objects, so no scan-gating needed there). Intake
+  identity: `PutObject` on quarantine only. Copy-Lambda role: `GetObject` +
+  `GetObjectTagging` on quarantine, `PutObject` on serving, `DeleteObject` on quarantine.
+  Directus serving identity: R/W on the serving bucket only.
+- **Extra work:** a custom raw-upload path replacing `FilesService` for intake, the
+  copy Lambda, `directus_files` record creation for copied objects, quarantine cleanup,
+  and failure handling (copy failures, orphan quarantine objects, retries). Materially more.
+- **Security:** strongest — Directus never touches unscanned bytes; the bucket policy stays
+  the authoritative gate.
+
+### Threat model and recommendation
+
+GM's dominant threat is **users/staff downloading a malicious submitted attachment**
+(public distribution safety). Protecting **Directus itself** from parsing a malicious
+image (a libvips 0-day) is a secondary, low-probability concern.
+
+**Recommendation: Option A**, for GM's scale and threat model — it prevents malicious
+downloads (private bucket + app-layer clean-file gating) without the heavy quarantine
+pipeline, accepting the bounded, low-probability server-side image-parsing risk. Choose
+**Option B only if** the org's risk appetite requires the bucket policy to remain the sole
+authoritative gate and requires Directus to never parse unscanned bytes; it is
+significantly more infrastructure and custom code. **This is a risk-appetite decision for
+the team; nothing is implemented until it is made.**
+
+### Exact CloudFormation changes required
+
+**For Option A** — in `MediaBucketPolicy`, statement `NoReadUnlessClean`, add the Directus
+user to `NotPrincipal` (this is the deliberate, documented weakening; do not apply until A
+is chosen):
+
+```yaml
+          - Sid: NoReadUnlessClean
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                - !Sub "arn:aws:sts::${AWS::AccountId}:assumed-role/${GuardDutyRoleName}/GuardDutyMalwareProtection"
+                - !GetAtt GuardDutyScanRole.Arn
+                - !GetAtt DirectusAppUser.Arn        # ADD: lets Directus stat/read for metadata + serving
+            Action: [s3:GetObject, s3:GetObjectVersion]
+            ...
+```
+
+Keep `OnlyGuardDutyCanTagScanStatus` and `DenyInsecureTransport` unchanged (Directus still
+cannot set the scan tag). App-layer gating (§6) becomes **required**, not optional.
+
+**For Option B** — a larger template change: add a second (quarantine) bucket, retarget the
+`MalwareProtectionPlan` + tag-based deny to the quarantine bucket, remove the deny from the
+serving bucket, add the copy-Lambda + its role and EventBridge target, and split IAM
+(intake PutObject-only on quarantine; Directus R/W on serving only). Specified above; full
+template to follow only if Option B is chosen.
 
 ---
 

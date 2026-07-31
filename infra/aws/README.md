@@ -5,6 +5,13 @@ media bucket, GuardDuty Malware Protection for S3 (independent feature), tag-bas
 clean-file access enforcement, a least-privilege Directus IAM application user, and
 malware plus cost alerting.
 
+> **⚠ NOT DEPLOY-READY.** Confirmed from Directus 12.0.2 source that `FilesService.uploadOne()`
+> reads the uploaded object during upload (`stat()`/`HeadObject` for every file; images also
+> `read()`/`GetObject`) **before** GuardDuty can tag it, so the `NoReadUnlessClean` deny would
+> break Directus uploads. Blocked on the scan-architecture decision (Option A vs Option B) and
+> the AWS Paid-plan upgrade. The policy is intentionally left unchanged (not silently weakened).
+> See `gathering-matters-db/docs/s3-scan-gating-design.md` §2 and §2a.
+
 - **Template:** `storage-security.yaml`
 - **Stack name:** `gathering-matters-storage-security`
 - **Account:** `025452941754` · **Region:** `us-west-2`

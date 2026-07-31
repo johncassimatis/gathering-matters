@@ -1,3 +1,17 @@
+# =============================================================================
+# NOT DEPLOY-READY - blocked on the scan-architecture decision (Option A vs B).
+#
+# Confirmed from Directus 12.0.2 source: FilesService.uploadOne() reads the just
+# uploaded object during upload (stat() -> HeadObject for every file; images also
+# read() -> GetObject via extractMetadata), BEFORE GuardDuty can tag it. The
+# NoReadUnlessClean deny below therefore BREAKS Directus uploads as written.
+# See gathering-matters-db/docs/s3-scan-gating-design.md sections 2 and 2a.
+#
+# Do NOT deploy until the team picks Option A (exempt the Directus identity from
+# the deny; enforce clean-file gating in the app) or Option B (quarantine bucket).
+# The policy is intentionally left UNCHANGED here (not silently weakened) pending
+# that decision.
+# =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Gathering Matters secure file storage for Directus. Private S3 media bucket,
