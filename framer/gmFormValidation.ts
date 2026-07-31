@@ -329,7 +329,7 @@ export const MESSAGES = {
         "Please review the highlighted fields and try again.",
     // Neutral confirmation when an attachment is included. No "malware" wording.
     attachmentPending:
-        "Your submission was received. Any attached document is being checked before review.",
+        "Your attachment was received and is being checked.",
     attachmentUnsupported:
         "That file type isn't supported. Please attach a PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), or plain text (.txt) file.",
     attachmentTooLarge: "That file is too large. Please attach a file under the size limit shown.",

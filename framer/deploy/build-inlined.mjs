@@ -20,7 +20,7 @@ const libImportMatch = helpers.match(libImportRe)
 const libImport = libImportMatch ? libImportMatch[0] : ""
 const helperBody = helpers.replace(libImportRe, "")
 
-const importBlock = /^import \{\n[\s\S]*?\n\} from "\.\/gmFormValidation"\n/m
+const importBlock = /^import \{\r?\n[\s\S]*?\r?\n\} from "\.\/gmFormValidation"\r?\n/m
 
 function inline(componentFile) {
   let code = fs.readFileSync(path.join(srcDir, componentFile), "utf8")

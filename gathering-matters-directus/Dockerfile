@@ -17,6 +17,7 @@ RUN cd extensions-src/gm-intake           && npm ci && npm run build
 RUN cd extensions-src/promote-submission  && npm ci && npm run build
 RUN cd extensions-src/gm-scan-consumer    && npm ci && npm run build
 RUN cd extensions-src/gm-publish-gate     && npm ci && npm run build
+RUN cd extensions-src/gm-review           && npm ci && npm run build
 
 FROM directus/directus:12.0.2
 COPY --from=build --chown=node:node /build/extensions-src/gm-library/package.json         /directus/extensions/directus-extension-gm-library/package.json
@@ -27,5 +28,7 @@ COPY --from=build --chown=node:node /build/extensions-src/promote-submission/pac
 COPY --from=build --chown=node:node /build/extensions-src/promote-submission/dist          /directus/extensions/directus-extension-promote-submission/dist
 COPY --from=build --chown=node:node /build/extensions-src/gm-scan-consumer/package.json    /directus/extensions/directus-extension-gm-scan-consumer/package.json
 COPY --from=build --chown=node:node /build/extensions-src/gm-scan-consumer/dist            /directus/extensions/directus-extension-gm-scan-consumer/dist
-COPY --from=build --chown=node:node /build/extensions-src/gm-publish-gate/package.json     /directus/extensions/directus-extension-gm-publish-gate/package.json
+  COPY --from=build --chown=node:node /build/extensions-src/gm-publish-gate/package.json     /directus/extensions/directus-extension-gm-publish-gate/package.json
 COPY --from=build --chown=node:node /build/extensions-src/gm-publish-gate/dist             /directus/extensions/directus-extension-gm-publish-gate/dist
+COPY --from=build --chown=node:node /build/extensions-src/gm-review/package.json           /directus/extensions/directus-extension-gm-review/package.json
+COPY --from=build --chown=node:node /build/extensions-src/gm-review/dist                   /directus/extensions/directus-extension-gm-review/dist

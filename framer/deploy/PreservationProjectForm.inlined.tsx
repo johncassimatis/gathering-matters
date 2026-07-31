@@ -24,9 +24,6 @@
 
 import React, { useEffect, useRef, useState } from "react"
 import { addPropertyControls, ControlType } from "framer"
-// @ts-ignore
-import { parsePhoneNumberFromString, AsYouType } from "https://esm.sh/libphonenumber-js@1.13.9"
-
 // ---- inlined from gmFormValidation.ts (see framer/ for the shared source) ----
 // gmFormValidation.ts
 // Shared, framework-agnostic helpers for the Gathering Matters Framer forms.
@@ -44,6 +41,8 @@ import { parsePhoneNumberFromString, AsYouType } from "https://esm.sh/libphonenu
 // for reproducibility. @ts-ignore: the URL module resolves at build time and
 // the Framer editor pulls its types from esm.sh; the isolated Server-API
 // typecheck can't see them (TS2307), so we suppress that one type-only error.
+// @ts-ignore
+import { parsePhoneNumberFromString, AsYouType } from "https://esm.sh/libphonenumber-js@1.13.9"
 
 // Production endpoint. HTTPS is required — an http:// URL is blocked as mixed
 // content on the published (HTTPS) Framer site.
@@ -355,6 +354,36 @@ export const MESSAGES = {
     server: "We couldn't submit your response right now. Please try again.",
     validationFallback:
         "Please review the highlighted fields and try again.",
+    // Neutral confirmation when an attachment is included. No "malware" wording.
+    attachmentPending:
+        "Your attachment was received and is being checked.",
+    attachmentUnsupported:
+        "That file type isn't supported. Please attach a PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), or plain text (.txt) file.",
+    attachmentTooLarge: "That file is too large. Please attach a file under the size limit shown.",
+}
+
+// --- public document attachment allowlist (client-side UX only) -------------
+// The BACKEND (gm-intake) is authoritative and re-validates every file, including
+// content signatures; these are only for a friendly picker + early error. Images,
+// CSV, OpenDocument, legacy/macro Office, archives, executables, scripts, and HTML
+// are intentionally NOT offered here.
+export const GM_UPLOAD_ACCEPT = ".pdf,.docx,.pptx,.xlsx,.txt"
+export const GM_UPLOAD_EXTS = ["pdf", "docx", "pptx", "xlsx", "txt"] as const
+export const GM_UPLOAD_MAX_BYTES = 15 * 1024 * 1024 // keep in sync with GM_PUBLIC_UPLOAD_MAX_BYTES
+export const GM_UPLOAD_MAX_FILES = 5
+
+export function formatBytes(n: number): string {
+    if (n >= 1024 * 1024) return `${Math.round(n / (1024 * 1024))} MB`
+    return `${Math.round(n / 1024)} KB`
+}
+
+// Client-side pre-check. Returns null when acceptable, else a user message.
+export function validateAttachmentClient(file: File): string | null {
+    const ext = (file.name.split(".").pop() || "").toLowerCase()
+    if (!(GM_UPLOAD_EXTS as readonly string[]).includes(ext)) return MESSAGES.attachmentUnsupported
+    if (file.size === 0) return MESSAGES.attachmentUnsupported
+    if (file.size > GM_UPLOAD_MAX_BYTES) return MESSAGES.attachmentTooLarge
+    return null
 }
 
 // --- field validators -------------------------------------------------------
@@ -759,10 +788,12 @@ function GmSelect(props: GmSelectProps) {
 interface Props {
     apiUrl?: string
     design?: GmFormDesignInput
+    enableAttachments?: boolean
 }
 
 export default function PreservationProjectForm(props: Partial<Props>) {
     const apiUrl = props.apiUrl || GM_API_URL
+    const enableAttachments = props.enableAttachments === true
     const design = resolveGmFormDesign(props.design)
     const visualStyle = gmFormStyleVars(design) as React.CSSProperties
 
@@ -784,6 +815,8 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         "idle" | "submitting" | "success" | "error"
     >("idle")
     const [formError, setFormError] = useState("")
+    const [attachments, setAttachments] = useState<File[]>([])
+    const [submittedWithAttachments, setSubmittedWithAttachments] = useState(false)
 
     const refs = {
         firstName: useRef<HTMLInputElement>(null),
@@ -796,6 +829,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         consentUpdates: useRef<HTMLInputElement>(null),
     } as const
     const successRef = useRef<HTMLDivElement>(null)
+    const uploadAbortRef = useRef<AbortController | null>(null)
+
+    useEffect(() => () => uploadAbortRef.current?.abort(), [])
 
     // Clear a field's error as the user edits it (Oaken: errors clear on input).
     function update<K extends keyof typeof values>(
@@ -810,6 +846,25 @@ export default function PreservationProjectForm(props: Partial<Props>) {
             return next
         })
         if (formError) setFormError("")
+    }
+
+    function onAttachmentsChange(files: FileList | null) {
+        const selected = Array.from(files || [])
+        if (selected.length > GM_UPLOAD_MAX_FILES) {
+            setAttachments([])
+            setStatus("error")
+            setFormError(`Please choose no more than ${GM_UPLOAD_MAX_FILES} files.`)
+            return
+        }
+        const rejected = selected.map(validateAttachmentClient).find(Boolean)
+        if (rejected) {
+            setAttachments([])
+            setStatus("error")
+            setFormError(rejected)
+            return
+        }
+        setAttachments(selected)
+        setFormError("")
     }
 
     function validate(): Partial<Record<GmFieldName, string>> {
@@ -888,6 +943,7 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         setErrors({})
         setFormError("")
         setStatus("submitting")
+        setSubmittedWithAttachments(attachments.length > 0)
 
         const phone = values.phone.trim()
         const idea = values.idea.trim()
@@ -915,12 +971,21 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         }
 
         let response: Response
+        uploadAbortRef.current = new AbortController()
         try {
-            response = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            })
+            if (attachments.length > 0) {
+                const form = new FormData()
+                Object.entries(payload).forEach(([key, value]) => form.append(key, String(value)))
+                attachments.forEach((file) => form.append("attachments", file, file.name))
+                response = await fetch(apiUrl, { method: "POST", body: form, signal: uploadAbortRef.current.signal })
+            } else {
+                response = await fetch(apiUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                    signal: uploadAbortRef.current.signal,
+                })
+            }
         } catch {
             setStatus("error")
             setFormError(MESSAGES.connection)
@@ -971,7 +1036,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                 >
                     <h3 style={{ margin: 0 }}>Thank you!</h3>
                     <p style={{ margin: "8px 0 0" }}>
-                        Your idea has been received for review.
+                        {submittedWithAttachments
+                            ? MESSAGES.attachmentPending
+                            : "Your idea has been received for review."}
                     </p>
                 </div>
             </div>
@@ -1165,6 +1232,26 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     {err("idea")}
                 </div>
 
+                {enableAttachments && (
+                    <div className="gmf-field">
+                        <label className="gmf-label" htmlFor="lp-attachments">
+                            Attach a document (optional)
+                        </label>
+                        <input
+                            className="gmf-control"
+                            id="lp-attachments"
+                            type="file"
+                            accept={GM_UPLOAD_ACCEPT}
+                            multiple
+                            onChange={(e) => onAttachmentsChange(e.target.files)}
+                            disabled={status === "submitting"}
+                        />
+                        <p className="gmf-hint" id="lp-attachments-hint">
+                            Up to {GM_UPLOAD_MAX_FILES} files, {formatBytes(GM_UPLOAD_MAX_BYTES)} each. PDF, Word, PowerPoint, Excel, or plain text.
+                        </p>
+                    </div>
+                )}
+
                 {/* Agreement consent (required) — covers review + contact */}
                 <div className={fieldCls("consentAgree")}>
                     <div className="gmf-checkbox-row">
@@ -1236,6 +1323,13 @@ export default function PreservationProjectForm(props: Partial<Props>) {
 }
 
 addPropertyControls(PreservationProjectForm, {
+    enableAttachments: {
+        type: ControlType.Boolean,
+        title: "Enable attachments",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
     design: {
         type: ControlType.Object,
         title: "Design",

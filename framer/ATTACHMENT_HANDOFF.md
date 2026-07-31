@@ -1,19 +1,18 @@
 # Framer form attachment wiring - handoff checklist
 
-Repository-controlled frontend prep for public document attachments is done in
-`gmFormValidation.ts` (allowlist, size limit, `validateAttachmentClient`, neutral
-messages). The two form components still need the file-input UI + multipart submit
-wired in. That final wiring + the Framer publish are a **manual, gated** step and
-are intentionally NOT done here (do not publish Framer during this work).
+Repository-controlled frontend wiring for public document attachments is done in
+`gmFormValidation.ts` and both form components (allowlist, size limit, file-input UI,
+multipart submit, neutral messages, and abort-on-unmount). The Framer publish remains a
+**manual, gated** step and is intentionally NOT done here.
 
 Forms: `framer/PreservationProjectForm.tsx` (Listening Program) and
 `framer/YoungAdultInitiativeForm.tsx` (Young Adult Initiative).
 
 ## Do this when enabling attachments (after the backend is deployed + `GM_PUBLIC_FILE_UPLOADS_ENABLED=true`)
 
-1. **Gate visibility.** Add a form prop/const `enableAttachments` (default `false`).
-   Only render the file field when `true`. Do not enable it until the backend flag
-   is on, or submissions with a file will fail (the JSON path ignores files).
+1. **Gate visibility.** Set the existing `enableAttachments` property to `true` only
+   after the backend flag is on. It defaults to `false`, so the no-attachment path is
+   unchanged until the backend is ready.
 
 2. **Add an optional file input** (import from `./gmFormValidation`):
    - `accept={GM_UPLOAD_ACCEPT}` and `multiple` (cap at `GM_UPLOAD_MAX_FILES`).
@@ -54,8 +53,10 @@ Forms: `framer/PreservationProjectForm.tsx` (Listening Program) and
    This regenerates `framer/deploy/*.inlined.tsx`. Review the diff.
 
 7. **Publishing is separate and gated.** Do NOT run `framer/deploy/deploy.mjs` until the
-   backend attachment feature is verified in production. Publishing Framer is the last
-   step, after the AWS + Directus deploy gates pass.
+   backend attachment feature is verified in the deployment environment. Clean documents
+   appear only through `/gm-library/downloads/:fileId`; pending/rejected files never
+   produce a public link. Publishing Framer is the last step, after the AWS + Directus
+   deploy gates pass.
 
 ## What the backend expects (contract)
 - `POST https://cms.gatheringmatters.com/gm-intake/submissions`, `multipart/form-data`.

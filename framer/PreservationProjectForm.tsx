@@ -42,6 +42,11 @@ import {
     readJsonSafely,
     classifyResponse,
     GmFieldName,
+    GM_UPLOAD_ACCEPT,
+    GM_UPLOAD_MAX_BYTES,
+    GM_UPLOAD_MAX_FILES,
+    formatBytes,
+    validateAttachmentClient,
 } from "./gmFormValidation"
 
 const HEADING = "Share a Gathering Idea"
@@ -268,10 +273,12 @@ function GmSelect(props: GmSelectProps) {
 interface Props {
     apiUrl?: string
     design?: GmFormDesignInput
+    enableAttachments?: boolean
 }
 
 export default function PreservationProjectForm(props: Partial<Props>) {
     const apiUrl = props.apiUrl || GM_API_URL
+    const enableAttachments = props.enableAttachments === true
     const design = resolveGmFormDesign(props.design)
     const visualStyle = gmFormStyleVars(design) as React.CSSProperties
 
@@ -293,6 +300,8 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         "idle" | "submitting" | "success" | "error"
     >("idle")
     const [formError, setFormError] = useState("")
+    const [attachments, setAttachments] = useState<File[]>([])
+    const [submittedWithAttachments, setSubmittedWithAttachments] = useState(false)
 
     const refs = {
         firstName: useRef<HTMLInputElement>(null),
@@ -305,6 +314,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         consentUpdates: useRef<HTMLInputElement>(null),
     } as const
     const successRef = useRef<HTMLDivElement>(null)
+    const uploadAbortRef = useRef<AbortController | null>(null)
+
+    useEffect(() => () => uploadAbortRef.current?.abort(), [])
 
     // Clear a field's error as the user edits it (Oaken: errors clear on input).
     function update<K extends keyof typeof values>(
@@ -319,6 +331,25 @@ export default function PreservationProjectForm(props: Partial<Props>) {
             return next
         })
         if (formError) setFormError("")
+    }
+
+    function onAttachmentsChange(files: FileList | null) {
+        const selected = Array.from(files || [])
+        if (selected.length > GM_UPLOAD_MAX_FILES) {
+            setAttachments([])
+            setStatus("error")
+            setFormError(`Please choose no more than ${GM_UPLOAD_MAX_FILES} files.`)
+            return
+        }
+        const rejected = selected.map(validateAttachmentClient).find(Boolean)
+        if (rejected) {
+            setAttachments([])
+            setStatus("error")
+            setFormError(rejected)
+            return
+        }
+        setAttachments(selected)
+        setFormError("")
     }
 
     function validate(): Partial<Record<GmFieldName, string>> {
@@ -397,6 +428,7 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         setErrors({})
         setFormError("")
         setStatus("submitting")
+        setSubmittedWithAttachments(attachments.length > 0)
 
         const phone = values.phone.trim()
         const idea = values.idea.trim()
@@ -424,12 +456,21 @@ export default function PreservationProjectForm(props: Partial<Props>) {
         }
 
         let response: Response
+        uploadAbortRef.current = new AbortController()
         try {
-            response = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            })
+            if (attachments.length > 0) {
+                const form = new FormData()
+                Object.entries(payload).forEach(([key, value]) => form.append(key, String(value)))
+                attachments.forEach((file) => form.append("attachments", file, file.name))
+                response = await fetch(apiUrl, { method: "POST", body: form, signal: uploadAbortRef.current.signal })
+            } else {
+                response = await fetch(apiUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                    signal: uploadAbortRef.current.signal,
+                })
+            }
         } catch {
             setStatus("error")
             setFormError(MESSAGES.connection)
@@ -480,7 +521,9 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                 >
                     <h3 style={{ margin: 0 }}>Thank you!</h3>
                     <p style={{ margin: "8px 0 0" }}>
-                        Your idea has been received for review.
+                        {submittedWithAttachments
+                            ? MESSAGES.attachmentPending
+                            : "Your idea has been received for review."}
                     </p>
                 </div>
             </div>
@@ -674,6 +717,26 @@ export default function PreservationProjectForm(props: Partial<Props>) {
                     {err("idea")}
                 </div>
 
+                {enableAttachments && (
+                    <div className="gmf-field">
+                        <label className="gmf-label" htmlFor="lp-attachments">
+                            Attach a document (optional)
+                        </label>
+                        <input
+                            className="gmf-control"
+                            id="lp-attachments"
+                            type="file"
+                            accept={GM_UPLOAD_ACCEPT}
+                            multiple
+                            onChange={(e) => onAttachmentsChange(e.target.files)}
+                            disabled={status === "submitting"}
+                        />
+                        <p className="gmf-hint" id="lp-attachments-hint">
+                            Up to {GM_UPLOAD_MAX_FILES} files, {formatBytes(GM_UPLOAD_MAX_BYTES)} each. PDF, Word, PowerPoint, Excel, or plain text.
+                        </p>
+                    </div>
+                )}
+
                 {/* Agreement consent (required) — covers review + contact */}
                 <div className={fieldCls("consentAgree")}>
                     <div className="gmf-checkbox-row">
@@ -745,6 +808,13 @@ export default function PreservationProjectForm(props: Partial<Props>) {
 }
 
 addPropertyControls(PreservationProjectForm, {
+    enableAttachments: {
+        type: ControlType.Boolean,
+        title: "Enable attachments",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
     design: {
         type: ControlType.Object,
         title: "Design",
