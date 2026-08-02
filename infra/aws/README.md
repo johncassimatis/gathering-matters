@@ -109,7 +109,11 @@ starts as `PendingConfirmation` and must be confirmed from the recipient inbox.
 ## Rollback / teardown
 
 - Delete the stack: `aws cloudformation delete-stack --stack-name gathering-matters-storage-security --region us-west-2`.
-- The bucket is retained on stack deletion (`RetainExceptOnCreate` / `UpdateReplacePolicy: Retain`).
+- The bucket is retained on a later stack **deletion or replacement** (`RetainExceptOnCreate`
+  behaves like `Retain` once the resource exists; `UpdateReplacePolicy: Retain` covers replacement).
+  The one exception is a **rollback of the INITIAL stack create**: `RetainExceptOnCreate` deletes the
+  just-created bucket in that case (by design, so a failed first deploy does not orphan an empty
+  bucket). Since this stack is now `CREATE_COMPLETE`, the bucket is retained from here on.
   To remove it intentionally, empty it (objects + all versions + delete-markers +
   incomplete multipart uploads) and then `s3api delete-bucket`. Never delete production data without approval.
 - Deactivate/delete the `gm-directus-s3-app` access key and user; the SNS topic,
