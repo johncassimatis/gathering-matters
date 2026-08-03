@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build -w --no-minify"
+    "dev": "directus-extension build -w --no-minify",
+    "test": "node --test test/"
   },
   "devDependencies": {
     "@directus/extensions-sdk": "12.0.2"

@@ -4,7 +4,7 @@
 // review-download roles; those roles use Directus' normal authenticated asset
 // permission for Clean Staff Review files.
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { normalizeUuidV7 } from './uuid.js';
 
 function ids(value) {
   return new Set(String(value || '').split(',').map((v) => v.trim()).filter(Boolean));
@@ -23,8 +23,12 @@ export default {
     const downloadRoleIds = ids(env.GM_REVIEW_DOWNLOAD_ROLE_IDS || env.GM_REVIEW_ROLE_IDS);
 
     router.get('/submissions/:submissionId/files', async (req, res) => {
-      const submissionId = String(req.params.submissionId || '').trim();
-      if (!UUID.test(submissionId)) return res.status(404).json({ error: 'not_found' });
+      // Canonical UUIDv7 only. Normalizes case for the lookup and rejects any
+      // non-v7 / malformed / padded / whitespace-bearing identifier before it
+      // can reach the database. Returns the generic not-found response so the
+      // endpoint never reveals whether a protected submission exists.
+      const submissionId = normalizeUuidV7(req.params.submissionId);
+      if (!submissionId) return res.status(404).json({ error: 'not_found' });
 
       const accountability = req.accountability;
       const isAdmin = accountability?.admin === true;
