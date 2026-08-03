@@ -3,6 +3,7 @@
 // enforced server-side; signed cursors keep pagination tied to one result window.
 
 import crypto from 'node:crypto';
+import { streamStoredFile } from './storage.js';
 
 const ALLOWED_SORTS = new Set(['relevance', 'newest', 'oldest']);
 const DEFAULT_LIMIT = 12;
@@ -64,6 +65,75 @@ export default {
   id: 'gm-library',
   handler: (router, { database: knex, logger, env }) => {
     const cursorSecret = env.GM_SEARCH_CURSOR_SECRET;
+
+    const isOn = (value) => value === true || value === 'true';
+    const isUuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+    // Public document downloads are served only through this route. The query
+    // is intentionally repeated at request time so revocation cannot be
+    // bypassed with a previously known Directus file UUID or cached URL.
+    router.get('/downloads/:fileId', async (req, res) => {
+      const fileId = String(req.params.fileId || '').trim();
+      if (!isUuid(fileId)) return res.status(404).json({ error: 'not_found' });
+      try {
+        const row = await knex('content_item_file as cif')
+          .join('content_item as ci', 'ci.id', 'cif.content_item_id')
+          .join('directus_files as df', 'df.id', 'cif.directus_file_id')
+          .join('file_scan as fs', 'fs.directus_file_id', 'df.id')
+          .join('submission_file as sf', 'sf.directus_file_id', 'df.id')
+          .where('df.id', fileId)
+          .where('cif.is_download', true)
+          .where('ci.status', 'published')
+          .whereRaw('ci.published_at <= now()')
+          .where('fs.origin', 'PUBLIC_SUBMISSION')
+          .where('fs.scan_status', 'NO_THREATS_FOUND')
+          .first(
+            'df.id', 'df.storage', 'df.filename_disk', 'df.filename_download', 'df.title', 'df.filesize',
+            'fs.object_key', 'fs.object_version_id', 'fs.etag', 'fs.bucket'
+          );
+
+        if (!row) return res.status(404).json({ error: 'not_found' });
+        const location = String(row.storage || env.STORAGE_LOCATIONS || 'local').split(',')[0].trim();
+        if (location === 's3' && isOn(env.GM_PUBLIC_DOWNLOAD_REQUIRE_VERSION ?? true) && !row.object_version_id) {
+          return res.status(404).json({ error: 'not_found' });
+        }
+
+        await streamStoredFile({ env, file: row, scan: row, res });
+      } catch (err) {
+        logger.warn(err, 'gm-library/download unavailable');
+        if (!res.headersSent) return res.status(404).json({ error: 'not_found' });
+        res.destroy();
+      }
+    });
+
+    // Future trusted staff media uses a separate route and classification. It
+    // does not depend on the anonymous document file_scan workflow, but it is
+    // still bound to a currently published featured-image association.
+    router.get('/media/:fileId', async (req, res) => {
+      const fileId = String(req.params.fileId || '').trim();
+      if (!isUuid(fileId)) return res.status(404).json({ error: 'not_found' });
+      try {
+        const row = await knex('content_item as ci')
+          .join('directus_files as df', 'df.id', 'ci.featured_image_id')
+          .leftJoin('file_scan as fs', 'fs.directus_file_id', 'df.id')
+          .leftJoin('submission_file as sf', 'sf.directus_file_id', 'df.id')
+          .where('df.id', fileId)
+          .where('ci.status', 'published')
+          .whereRaw('ci.published_at <= now()')
+          .whereNull('sf.directus_file_id')
+          .where((qb) => qb.whereNull('fs.origin').orWhere('fs.origin', 'STAFF_MANAGED'))
+          .first(
+            'df.id', 'df.storage', 'df.filename_disk', 'df.filename_download', 'df.title', 'df.filesize',
+            'fs.object_key', 'fs.object_version_id', 'fs.etag', 'fs.bucket'
+          );
+        if (!row) return res.status(404).json({ error: 'not_found' });
+        await streamStoredFile({ env, file: row, scan: row, res });
+      } catch (err) {
+        logger.warn(err, 'gm-library/media unavailable');
+        if (!res.headersSent) return res.status(404).json({ error: 'not_found' });
+        res.destroy();
+      }
+    });
 
     router.get('/search', async (req, res) => {
       try {
@@ -325,14 +395,41 @@ export default {
           .orderBy('t.dimension')
           .orderBy('t.name');
 
-        const files = await db('content_item_file')
-          .where('content_item_id', item.id)
-          .where('is_download', true)
-          .select('directus_file_id', 'label', 'sort')
-          .orderBy('sort')
-          .orderBy('id');
+        // Scan-gating (GM_SCAN_GATING_ENABLED): a downloadable file is returned
+        // only when the custom request-time route can enforce the current state.
+        const scanGating = isOn(env.GM_SCAN_GATING_ENABLED);
 
-        return res.json({ data: { ...item, tags, files } });
+        let filesQ = db('content_item_file as cif')
+          .where('cif.content_item_id', item.id)
+          .where('cif.is_download', true);
+        if (scanGating) {
+          filesQ = filesQ
+            .join('file_scan as fs', 'fs.directus_file_id', 'cif.directus_file_id')
+            .join('submission_file as sf', 'sf.directus_file_id', 'cif.directus_file_id')
+            .where('fs.origin', 'PUBLIC_SUBMISSION')
+            .where('fs.scan_status', 'NO_THREATS_FOUND');
+        }
+        const files = await filesQ
+          .select('cif.directus_file_id as directus_file_id', 'cif.label as label', 'cif.sort as sort')
+          .orderBy('cif.sort').orderBy('cif.id');
+        const publicFiles = scanGating
+          ? files.map((file) => ({ ...file, download_url: `/gm-library/downloads/${file.directus_file_id}` }))
+          : files;
+
+        // Gate the featured image the same way when scan-gating is on.
+        let featured_image_id = item.featured_image_id;
+        let featured_image_url = null;
+        if (featured_image_id) {
+          const publicSubmission = await db('submission_file as sf')
+            .join('file_scan as fs', 'fs.directus_file_id', 'sf.directus_file_id')
+            .where('sf.directus_file_id', featured_image_id)
+            .where('fs.origin', 'PUBLIC_SUBMISSION')
+            .first('sf.directus_file_id');
+          if (publicSubmission) featured_image_id = null;
+          else featured_image_url = `/gm-library/media/${featured_image_id}`;
+        }
+
+        return res.json({ data: { ...item, featured_image_id, featured_image_url, tags, files: publicFiles } });
       } catch (err) {
         logger.error(err, 'gm-library/items failed');
         return res.status(500).json({ error: 'detail_failed' });

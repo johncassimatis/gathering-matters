@@ -1,0 +1,529 @@
+# =============================================================================
+# OPTION A implemented. NOT YET DEPLOYED.
+#
+# Directus 12.0.2 reads the object during upload (stat()->HeadObject for every
+# file; images also read()->GetObject), before GuardDuty can tag it. Option A
+# therefore EXEMPTS the Directus application identity (and the GuardDuty role)
+# from the clean-file read deny below, so uploads/metadata work; public and
+# ordinary-staff distribution is gated by Directus permissions (see
+# tools/provision-scan-file-permissions.mjs, verified in prod) plus app-layer
+# checks, not by this bucket policy. Directus still cannot set the scan tag.
+#
+# Remaining deploy gates: AWS Paid-plan upgrade (GuardDuty), a live GuardDuty
+# scan test, and the production role-by-role smoke test. Do NOT deploy or execute
+# a change set until those pass. See docs/s3-scan-gating-design.md sections 2/2a.
+# =============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Gathering Matters secure file storage for Directus. Private S3 media bucket,
+  GuardDuty Malware Protection for S3 (independent feature) with scan-result
+  tagging, tag-based clean-file access enforcement, a least-privilege Directus
+  IAM application user, and malware plus cost alerting. Region us-west-2.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: engineering@gatheringmatters.com
+    Description: Email address for malware-scan and budget notifications. Must be confirmed from the inbox for SNS.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  GuardDutyRoleName:
+    Type: String
+    Default: gm-guardduty-malware-protection-s3-role
+    Description: Fixed IAM role name for GuardDuty Malware Protection. Referenced by the bucket policy NotPrincipal, so it must be stable.
+  MonthlyBudgetAmount:
+    Type: Number
+    Default: 10
+    Description: Monthly AWS cost budget in USD.
+
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # S3 media bucket (private, hardened)
+  # ---------------------------------------------------------------------------
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    # RetainExceptOnCreate: protects the production bucket after a successful
+    # deploy, but does NOT orphan an empty bucket if the INITIAL create rolls
+    # back (unlike plain Retain, which left the orphan we had to clean up).
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "gathering-matters-directus-media-${AWS::AccountId}-us-west-2"
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # GuardDuty Malware Protection service role (verbatim AWS-documented policy,
+  # KMS statement omitted because the bucket uses SSE-S3 / AES256, not KMS)
+  # ---------------------------------------------------------------------------
+  GuardDutyScanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref GuardDutyRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: malware-protection-plan.guardduty.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: guardduty-malware-protection-s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowManagedRuleToSendS3EventsToGuardDuty
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource:
+                  - !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*"
+                Condition:
+                  StringLike:
+                    events:ManagedBy: malware-protection-plan.guardduty.amazonaws.com
+              - Sid: AllowGuardDutyToMonitorEventBridgeManagedRule
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                Resource:
+                  - !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*"
+              - Sid: AllowPostScanTag
+                Effect: Allow
+                Action:
+                  - s3:PutObjectTagging
+                  - s3:GetObjectTagging
+                  - s3:PutObjectVersionTagging
+                  - s3:GetObjectVersionTagging
+                Resource:
+                  - !Sub "arn:aws:s3:::${MediaBucket}/*"
+              - Sid: AllowEnableS3EventBridgeEvents
+                Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                  - s3:GetBucketNotification
+                Resource:
+                  - !Sub "arn:aws:s3:::${MediaBucket}"
+              - Sid: AllowPutValidationObject
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${MediaBucket}/malware-protection-resource-validation-object"
+              - Sid: AllowCheckBucketOwnership
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${MediaBucket}"
+              - Sid: AllowMalwareScan
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub "arn:aws:s3:::${MediaBucket}/*"
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # Bucket policy: TLS-only + tag-based clean-file access control (TBAC)
+  # ---------------------------------------------------------------------------
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "arn:aws:s3:::${MediaBucket}"
+              - !Sub "arn:aws:s3:::${MediaBucket}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          # Option A: deny reads of not-yet-clean objects to EVERY principal
+          # EXCEPT the GuardDuty scan role and the Directus app identity (which
+          # must read for metadata + serving). Uses Principal:* + ArnNotEquals on
+          # aws:PrincipalArn rather than NotPrincipal. Public/staff distribution
+          # is gated by Directus permissions + app logic, not this statement.
+          - Sid: NoReadUnlessCleanExceptDirectusAndGuardDuty
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource: !Sub "arn:aws:s3:::${MediaBucket}/*"
+            Condition:
+              StringNotEquals:
+                s3:ExistingObjectTag/GuardDutyMalwareScanStatus: NO_THREATS_FOUND
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  - !GetAtt GuardDutyScanRole.Arn
+                  - !GetAtt DirectusAppUser.Arn
+          - Sid: OnlyGuardDutyCanTagScanStatus
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                - !Sub "arn:aws:sts::${AWS::AccountId}:assumed-role/${GuardDutyRoleName}/GuardDutyMalwareProtection"
+                - !GetAtt GuardDutyScanRole.Arn
+            Action:
+              - s3:PutObjectTagging
+              - s3:PutObjectVersionTagging
+            Resource: !Sub "arn:aws:s3:::${MediaBucket}/*"
+            Condition:
+              "ForAnyValue:StringEquals":
+                s3:RequestObjectTagKeys: GuardDutyMalwareScanStatus
+
+  # ---------------------------------------------------------------------------
+  # GuardDuty Malware Protection plan (independent feature; whole bucket)
+  # ---------------------------------------------------------------------------
+  MalwareProtectionPlan:
+    Type: AWS::GuardDuty::MalwareProtectionPlan
+    DependsOn: MediaBucketPolicy
+    Properties:
+      Role: !GetAtt GuardDutyScanRole.Arn
+      ProtectedResource:
+        S3Bucket:
+          BucketName: !Ref MediaBucket
+      Actions:
+        Tagging:
+          Status: ENABLED
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # Directus application IAM user (least privilege, bucket-scoped)
+  # No console login (no LoginProfile). No IAM/GuardDuty permissions.
+  # ---------------------------------------------------------------------------
+  DirectusAppUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: gm-directus-s3-app
+      Policies:
+        - PolicyName: directus-s3-bucket-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BucketLevel
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub "arn:aws:s3:::${MediaBucket}"
+              - Sid: ObjectLevel
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub "arn:aws:s3:::${MediaBucket}/*"
+              - Sid: ScanQueueConsume
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt ScanResultQueue.Arn
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # GuardDuty scan-result delivery: EventBridge -> SQS -> Directus consumer
+  # ---------------------------------------------------------------------------
+  ScanResultDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: gathering-matters-s3-scan-results-dlq
+      MessageRetentionPeriod: 1209600   # 14 days
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ScanResultQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: gathering-matters-s3-scan-results
+      VisibilityTimeout: 90
+      MessageRetentionPeriod: 345600    # 4 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ScanResultDLQ.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # All object scan results (every status) go to the queue for the consumer.
+  ScanResultToQueueRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: gathering-matters-s3-scan-results-to-queue
+      Description: Deliver all GuardDuty Malware Protection S3 object scan results to the consumer queue.
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.guardduty
+        detail-type:
+          - GuardDuty Malware Protection Object Scan Result
+      Targets:
+        - Id: scan-results-queue
+          Arn: !GetAtt ScanResultQueue.Arn
+
+  ScanResultQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref ScanResultQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowOnlyScanResultRuleToSend
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ScanResultQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScanResultToQueueRule.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  ScanDLQNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gathering-matters-s3-scan-dlq-not-empty
+      AlarmDescription: Scan-result messages are dead-lettering; the Directus consumer is not processing them.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ScanResultDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref MalwareAlertsTopic
+
+  # ---------------------------------------------------------------------------
+  # Malware alerts: SNS topic, email subscription, EventBridge rule
+  # ---------------------------------------------------------------------------
+  MalwareAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: gathering-matters-s3-malware-alerts
+      DisplayName: GM S3 Malware Alerts
+      Tags:
+        - Key: Project
+          Value: GatheringMatters
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  MalwareAlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      TopicArn: !Ref MalwareAlertsTopic
+
+  MalwareScanResultRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: gathering-matters-s3-malware-scan-alerts
+      Description: Alert on GuardDuty Malware Protection S3 scan results needing attention (not NO_THREATS_FOUND).
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.guardduty
+        detail-type:
+          - GuardDuty Malware Protection Object Scan Result
+        detail:
+          scanResultDetails:
+            scanResultStatus:
+              - THREATS_FOUND
+              - UNSUPPORTED
+              - ACCESS_DENIED
+              - FAILED
+      Targets:
+        - Id: malware-alerts-sns
+          Arn: !Ref MalwareAlertsTopic
+          InputTransformer:
+            InputPathsMap:
+              bucket: "$.detail.s3ObjectDetails.bucketName"
+              object: "$.detail.s3ObjectDetails.objectKey"
+              status: "$.detail.scanResultDetails.scanResultStatus"
+            InputTemplate: '"GuardDuty Malware Protection flagged an S3 object needing attention. Bucket: <bucket> Object: <object> ScanResultStatus: <status>. The clean-file bucket policy keeps this object unreadable by the application until it is tagged NO_THREATS_FOUND. Review before allowing access."'
+
+  MalwareAlertsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref MalwareAlertsTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref MalwareAlertsTopic
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt MalwareScanResultRule.Arn
+
+  # ---------------------------------------------------------------------------
+  # Monthly cost budget ($10) with actual + forecast thresholds
+  # ---------------------------------------------------------------------------
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: GatheringMatters-Monthly-AWS-Budget
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetAmount
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+Outputs:
+  BucketName:
+    Description: Directus media bucket name.
+    Value: !Ref MediaBucket
+  BucketArn:
+    Description: Directus media bucket ARN.
+    Value: !GetAtt MediaBucket.Arn
+  GuardDutyScanRoleArn:
+    Description: GuardDuty Malware Protection service role ARN.
+    Value: !GetAtt GuardDutyScanRole.Arn
+  MalwareProtectionPlanId:
+    Description: GuardDuty Malware Protection plan ID.
+    Value: !Ref MalwareProtectionPlan
+  DirectusAppUserArn:
+    Description: Directus application IAM user ARN.
+    Value: !GetAtt DirectusAppUser.Arn
+  DirectusAppUserName:
+    Description: Directus application IAM user name.
+    Value: !Ref DirectusAppUser
+  MalwareAlertsTopicArn:
+    Description: SNS topic ARN for malware alerts (email subscription requires confirmation).
+    Value: !Ref MalwareAlertsTopic
+  MalwareScanResultRuleName:
+    Description: EventBridge rule name for scan-result alerts.
+    Value: !Ref MalwareScanResultRule
+  BudgetName:
+    Description: Monthly cost budget name.
+    Value: GatheringMatters-Monthly-AWS-Budget
+  ScanResultQueueUrl:
+    Description: SQS scan-result queue URL (set as GM_GUARDDUTY_SCAN_QUEUE_URL for the consumer).
+    Value: !Ref ScanResultQueue
+  ScanResultQueueArn:
+    Description: SQS scan-result queue ARN.
+    Value: !GetAtt ScanResultQueue.Arn
+  ScanResultDLQArn:
+    Description: Dead-letter queue ARN for scan-result processing failures.
+    Value: !GetAtt ScanResultDLQ.Arn

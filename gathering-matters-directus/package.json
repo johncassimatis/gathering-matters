@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:render": "node tests/run-tests.js"
+    "test:render": "node tests/run-tests.js",
+    "test:integration": "node tests/run-integration.mjs"
   },
   "keywords": [],
   "author": "",
