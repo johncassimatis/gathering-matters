@@ -13,6 +13,14 @@ services:
       - ./uploads:/directus/uploads
 
   test-runner:
+    # Behind the "test" profile so the default `docker compose up -d` neither
+    # starts it nor validates its env_file. Without the profile, a missing
+    # .env.test aborts every compose command in this project — including
+    # bootstrap — even when you only wanted Directus.
+    #
+    # `docker compose run --rm test-runner` auto-enables this profile, so no
+    # --profile flag is needed for the normal test invocation.
+    profiles: ["test"]
     build:
       context: .
       dockerfile: Dockerfile.test-runner

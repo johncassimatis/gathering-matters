@@ -30,22 +30,31 @@ form, edit here then paste into the Framer component of the same name.
 
 | | Listening Program | Young Adult Initiative |
 |---|---|---|
-| Email | **required** (administrative contact) | **required** |
+| Email | **required** (administrative contact) | **required** (follow-up is a core purpose) |
 | Phone | optional | optional |
-| `consent_to_review` | required | required |
-| `consent_to_contact` | **optional** (explicit follow-up choice) | **required** |
-| Contact-consent copy | "optional: …may follow up about this submission" | follow-up is part of the programme |
-| Age | "Your age range" dropdown (`18_24 … 65_plus`) | same dropdown (submitter's own age) |
+| `consent_to_review` | **required** — from the agreement checkbox | **required** — from the agreement checkbox |
+| `consent_to_contact` | **required** — same agreement checkbox | **required** — same agreement checkbox |
+| `consent_to_updates` | optional — separate second checkbox | optional — separate second checkbox |
+| `preferred_follow_up` | not collected | **required** (`email` \| `phone` \| `video`) |
+| Age | "Your age range" (`AGE_OPTIONS`: `18_24 … 65_plus`) | restricted to `18_24` only (`YAI_AGE_OPTIONS`) — programme eligibility |
 | Body | description only | description only (no follow-up append) |
 
 **Name & order:** Full name is split into **First / Last** side by side; **First/Last name and Email come first**, then phone, age, title, description, consents. `submitter_name` is sent as `"First Last"` (trimmed) — no backend change.
 
 **Oaken-parity interaction model** (`GM_FORM_CSS` in `gmFormValidation.ts`, adapted to GM's palette): per-field **error icon** inside the input + red border + pink fill + message (`role="alert"`), shown on Submit and cleared on input; field **hover / focus (ring) / error / error-focus** states; button **hover / active / focus-visible / disabled(loading)** states; phone **formats as you type**; `inputmode` on email/phone. Validation fires on Submit only (matching Oaken); phone stays optional (a GM rule, unlike Oaken's required phone).
 
-Contact consent means permission to contact the submitter **about the submission**
-(schema: `submission.contact_consent`) — never a marketing "receive updates" opt-in.
-For LP the required email is administrative; agreeing to follow-up is the separate,
-optional checkbox.
+**Two checkboxes, deliberately separate** (Phase 3 — matches the `gm-intake` contract):
+
+1. **Agreement — required, both forms.** One checkbox sets *both* `consent_to_review` and
+   `consent_to_contact`. This is service consent: permission to review the submission and to
+   follow up **about that submission** (schema: `submission.contact_consent`). The backend
+   rejects a submission without it, on either source.
+2. **Updates — optional, both forms.** A second checkbox sets `consent_to_updates`
+   (schema: `submission.updates_consent`). This is marketing consent and is **never** bundled
+   into the required agreement — a marketing opt-in has to be freely given. It never blocks
+   submit.
+
+Do not merge these into one checkbox, and do not make the updates box default-checked.
 
 ## Age field — meaning
 
@@ -97,14 +106,23 @@ country from digit count.
 `deploy/` holds the automation used to push these to test pages via the Framer
 Server API (key in `../gathering-matters-directus/tag-sync/.env`):
 
-- `deploy/build-inlined.mjs` — inlines the shared helpers into each component and
-  strips editor-only property controls, producing self-contained `*.inlined.tsx`
-  (the headless build can't resolve cross-code-file imports or `addPropertyControls`).
+- `deploy/build-inlined.mjs` — inlines the shared `gmFormValidation.ts` helpers into each
+  component (hoisting the esm.sh `libphonenumber-js` import to the top), producing
+  self-contained `*.inlined.tsx`. The headless build can't resolve cross-code-file imports,
+  so the 3-file structure in `../` stays the clean reference. Framer **Property Controls are
+  kept**, so the deployed component exposes the same designer panel as the source.
+  Regenerate and commit the `.inlined.tsx` files whenever a source component or the shared
+  helper changes — `git diff` on `deploy/` after a run should be empty.
 - `deploy/deploy.mjs` — idempotent: creates/updates the two code files, typechecks
   them via the API, creates the two test pages, and places each component. Never
   touches existing pages. Holds publish unless `--publish` is passed.
 
+`deploy.mjs` imports `framer-api` by absolute path out of `tag-sync/node_modules` (the only
+place it is installed), so that install is a prerequisite — without it you get a bare
+module-not-found. From the repository root:
+
 ```bash
+npm --prefix gathering-matters-directus/tag-sync ci    # once per checkout — provides framer-api
 node framer/deploy/build-inlined.mjs
 node --env-file=gathering-matters-directus/tag-sync/.env framer/deploy/deploy.mjs
 ```

@@ -6,8 +6,6 @@ flyway.user.toml
 /gathering-matters-db/flyway.user.toml.superuser
 /gathering-matters-db/directus.login
 
-/gathering-matters-db/docs/
-
 .idea/
 .neon
 
