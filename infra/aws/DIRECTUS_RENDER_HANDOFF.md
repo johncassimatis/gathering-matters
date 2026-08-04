@@ -147,3 +147,25 @@ S3 object but **no `file_scan` row**, so GuardDuty's event is unmatched by the c
 retried, and eventually dead-lettered. **Why not raw SQL?** Hand-inserting a `file_scan`
 row is unsupported, easy to get wrong (object key/version/etag), and bypasses validation
 and the read-after-write identity capture; this route reuses the proven intake logic.
+
+## Scan gating enabled (production milestone)
+
+- **Enabled:** 2026-08-04 — `GM_SCAN_GATING_ENABLED=false -> true` (only that variable changed).
+- **Render deploy:** `dep-d9p5bgr7uimc73ak1vk0`, live commit `d237c0f`, trigger `api`.
+- **Final flags:** `GM_PUBLIC_FILE_UPLOADS_ENABLED=false`, `GM_SCAN_CONSUMER_ENABLED=true`,
+  `GM_SCAN_GATING_ENABLED=true`, `GM_TEST_MODE=false`, `GM_STAFF_FILE_UPLOADS_ENABLED=false`;
+  `GM_STAFF_FILE_UPLOAD_ROLE_IDS` remains absent.
+- **Retained clean artifact:** file `464be434...`, scan `019fcc43...`, `NO_THREATS_FOUND`,
+  `Clean Staff Review`, unpublished, no submission association.
+- **Production clean-path result:** clean artifact remains reviewable by authenticated staff,
+  did NOT auto-publish (Public Downloads=0), anonymous `/assets` denied (403), public
+  `/gm-library/downloads` denied (404). Six extensions load; 0 permission/gate errors; queues 0/0/0.
+- **Disposable unsafe-status matrix:** certified via the real-extension unit suites (71/71),
+  including the `gm-publish-gate` exhaustive folder-placement truth table (non-clean ->
+  Pending; clean-only -> Clean Staff Review; clean+published+is_download+active -> Public Downloads).
+- **Still disabled:** public uploads and staff uploads remain OFF.
+- **Launch gate:** the production threat-positive (`THREATS_FOUND`) GuardDuty test remains
+  PENDING approval of the exact harmless test artifact/procedure; public launch stays blocked
+  until it is completed. This account runs Malware Protection for S3 as an independent feature
+  (no detector), so a threat produces the EventBridge scan-result event + object tag + SNS alert,
+  but no GuardDuty finding.
