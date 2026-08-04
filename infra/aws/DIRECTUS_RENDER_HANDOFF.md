@@ -108,3 +108,42 @@ Flip them on in the order: consumer, gating, then uploads. `false` on any of the
 instantly reverts to current behaviour. The Directus permission layer is applied via
 `tools/provision-scan-file-permissions.mjs`. Run `--revoke-public-assets` explicitly during
 that deployment window; it has not been run by this task.
+
+## Authenticated staff-managed scan upload (controlled clean-file test)
+
+`POST /gm-intake/staff-files` is the supported way to put ONE benign document
+through the real scan workflow without enabling the public intake form. It creates
+the S3 object (Pending folder) AND the matching `file_scan(PENDING, origin=STAFF_MANAGED)`
+in one flow, so the consumer can correlate GuardDuty's event by the exact S3 object key.
+
+```env
+GM_STAFF_FILE_UPLOADS_ENABLED=false   # keep OFF except during a controlled test
+GM_STAFF_FILE_UPLOAD_ROLE_IDS=        # extra role UUIDs allowed (admins always allowed)
+```
+
+- **Auth:** administrator (Directus accountability) or a role in
+  `GM_STAFF_FILE_UPLOAD_ROLE_IDS`. Anonymous/unlisted callers get `403`; while the
+  flag is off the route returns `404` (fail-closed). `GM_PENDING_FOLDER_ID` is required.
+- **Request:** `multipart/form-data`, one file under field `attachments` (PDF/DOCX/
+  PPTX/XLSX/TXT only; images/CSV/executables/mismatches/empty/oversize/multiple are
+  rejected). Optional `submission_id` (a canonical UUIDv7 of an existing submission)
+  creates a `submission_file` association; omit it for a standalone file.
+- **Response:** `{ data: { file_id, scan_state:"PENDING", status:"pending_scan",
+  association_id? } }` — no object key/etag/version/`filename_disk`/signed URL.
+
+### Run one controlled clean-file test, then disable
+1. Confirm the consumer is enabled and the queues are empty.
+2. Temporarily set `GM_STAFF_FILE_UPLOADS_ENABLED=true` (and, if using a non-admin
+   operator, add their role to `GM_STAFF_FILE_UPLOAD_ROLE_IDS`); redeploy.
+3. As an admin/allowlisted staff user, POST one benign `.txt` to `/gm-intake/staff-files`.
+4. Verify: one `directus_files` row in Pending; one `file_scan` PENDING/STAFF_MANAGED
+   with `object_key` == the S3 key; GuardDuty tags it `NO_THREATS_FOUND`; the event
+   reaches the main queue; the consumer moves it to Clean Staff Review and drains the
+   queue; anonymous `/assets/<id>` is denied; nothing is published or public.
+5. Set `GM_STAFF_FILE_UPLOADS_ENABLED=false` again (and remove any temporary role id).
+
+**Why not just upload through `/files`?** A plain Directus `/files` upload creates the
+S3 object but **no `file_scan` row**, so GuardDuty's event is unmatched by the consumer,
+retried, and eventually dead-lettered. **Why not raw SQL?** Hand-inserting a `file_scan`
+row is unsupported, easy to get wrong (object key/version/etag), and bypasses validation
+and the read-after-write identity capture; this route reuses the proven intake logic.

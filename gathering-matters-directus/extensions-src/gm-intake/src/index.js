@@ -18,6 +18,7 @@ import busboy from 'busboy';
 import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createError } from '@directus/errors';
 import { validateDocument, FileRejected } from './file-validation.js';
+import { authorizeStaffUpload, normalizeUuidV7 } from './staff-auth.js';
 
 const BadRequestError = createError('INVALID_REQUEST', 'Invalid submission payload.', 400);
 const ValidationError = createError('VALIDATION_FAILED', 'Submission validation failed.', 422);
@@ -323,6 +324,126 @@ export default {
         const code = error.code;
         if (code === 'INVALID_REQUEST' || code === 'VALIDATION_FAILED' || code === 'PAYLOAD_TOO_LARGE' || code === 'RATE_LIMITED') return next(error);
         logger.error(error, 'gm-intake/submissions failed');
+        return next(new SubmissionError());
+      }
+    });
+
+    // -----------------------------------------------------------------------
+    // Authenticated staff-managed scan upload: POST /gm-intake/staff-files
+    //
+    // Reuses the public path's proven multipart parsing, document validation,
+    // FilesService storage, and S3 object-identity logic, but is gated by its
+    // OWN feature flag (GM_STAFF_FILE_UPLOADS_ENABLED, default off) and requires
+    // an authenticated administrator or an allowlisted role. It creates the
+    // matching file_scan(PENDING) row with origin='STAFF_MANAGED' so the scan
+    // consumer can correlate GuardDuty's event by the exact S3 object key. A
+    // submission_file association is optional (file_scan has no submission FK).
+    // It is NOT the public intake path and never grants anonymous access.
+    // -----------------------------------------------------------------------
+    router.post('/staff-files', async (req, res, next) => {
+      const storedFileIds = [];
+      let filesService = null;
+      // Defined before the try so cleanup in catch can also honor injection.
+      const injectedFailure = (env.GM_TEST_MODE === true || env.GM_TEST_MODE === 'true')
+        ? String(req.headers['x-gm-test-failure'] || '') : '';
+      const failIf = (stage) => { if (injectedFailure === stage) throw new Error(`GM_TEST_MODE injected failure: ${stage}`); };
+      try {
+        // 1. Feature flag — fail closed (404 hides the disabled feature).
+        if (!flagOn(env.GM_STAFF_FILE_UPLOADS_ENABLED)) return res.status(404).json({ error: 'not_found' });
+        // 2. Authorization BEFORE reading any file bytes.
+        const authz = authorizeStaffUpload(req.accountability, env);
+        if (!authz.ok) return res.status(403).json({ error: 'forbidden' });
+        // 3. Required folder configuration.
+        const pendingFolderId = String(env.GM_PENDING_FOLDER_ID || '').trim();
+        if (!isUuid(pendingFolderId)) { logger.error('gm-intake/staff-files: GM_PENDING_FOLDER_ID missing/invalid'); return res.status(503).json({ error: 'unavailable' }); }
+        if (!req.is('multipart/form-data')) return next(new BadRequestError({ reason: 'multipart/form-data required' }));
+
+        const storageLocation = String(env.STORAGE_LOCATIONS || 'local').split(',')[0].trim() || 'local';
+        const maxFileBytes = Number(env.GM_PUBLIC_UPLOAD_MAX_BYTES ?? DEFAULT_MAX_FILE_BYTES);
+
+        // 4. Parse multipart — single document only.
+        let parsed;
+        try { parsed = await parseMultipart(req, { maxFiles: 1, maxFileBytes, maxTotalBytes: maxFileBytes }); }
+        catch { throw new BadRequestError({ reason: 'malformed multipart request' }); }
+        const { fields, files, flags } = parsed;
+
+        // 5. Guards.
+        if (flags.oversizeFile || flags.totalExceeded) throw new PayloadTooLargeError({ reason: `a file exceeds ${maxFileBytes} bytes` });
+        if (flags.tooManyFiles || files.length > 1) throw new ValidationError({ reason: 'exactly one document per request' });
+        if (flags.unexpectedFile) throw new ValidationError({ reason: 'file must use the attachments field' });
+        if (files.length !== 1) throw new ValidationError({ reason: 'exactly one document is required' });
+        const up = files[0];
+
+        // 6. Document validation (same allowlist as public: PDF/DOCX/PPTX/XLSX/TXT).
+        try { const v = validateDocument({ filename: up.filename, declaredMime: up.mimeType, buffer: up.buffer, maxBytes: maxFileBytes }); up.mime = v.mime; up.safeName = v.safeName; }
+        catch (e) { if (e instanceof FileRejected) throw new ValidationError({ reason: `document rejected: ${e.reason}` }); throw e; }
+
+        // 7. Optional submission association (must be an existing canonical UUIDv7).
+        let submissionId = null;
+        const rawSubmission = String(fields.submission_id || '').trim();
+        if (rawSubmission) {
+          submissionId = normalizeUuidV7(rawSubmission);
+          if (!submissionId) throw new ValidationError({ reason: 'submission_id must be a canonical UUIDv7' });
+          const exists = await db('submission').where('id', submissionId).first('id');
+          if (!exists) throw new ValidationError({ reason: 'submission not found' });
+        }
+
+        // 8. Store into the Pending Malware Scan folder via a narrow admin-context
+        //    server-side write (no caller collection permissions are inherited).
+        failIf('staff_files_upload');
+        const schema = await getSchema();
+        filesService = new services.FilesService({ schema, knex: db, accountability: { admin: true } });
+        const fileId = await filesService.uploadOne(Readable.from(up.buffer), {
+          storage: storageLocation, filename_download: up.safeName, type: up.mime, title: up.safeName, folder: pendingFolderId,
+        });
+        storedFileIds.push(fileId);
+
+        // 9. Object identity — same read-after-write helper as public intake.
+        failIf('staff_identity');
+        const fileRow = await db('directus_files').where('id', fileId).first('filename_disk');
+        const identity = await readObjectIdentity(env, storageLocation, fileRow?.filename_disk);
+
+        // 10. Correlatable records (transaction). file_scan is created immediately
+        //     after obtaining identity to minimize the unmatched-event window; a
+        //     temporarily unmatched GuardDuty event is retried (never deleted) by
+        //     the consumer until this row exists.
+        let associationId = null;
+        await db.transaction(async (trx) => {
+          if (submissionId) {
+            const [assoc] = await trx('submission_file')
+              .insert({ submission_id: submissionId, directus_file_id: fileId, label: up.safeName, sort: 0 })
+              .returning(['id']);
+            associationId = assoc.id;
+            failIf('staff_submission_file_insert');
+          }
+          await trx('file_scan').insert({
+            directus_file_id: fileId, origin: 'STAFF_MANAGED',
+            object_key: identity.objectKey || fileRow?.filename_disk || null,
+            bucket: identity.bucket || null,
+            object_version_id: identity.objectVersionId || null,
+            etag: identity.etag || null,
+            scan_status: 'PENDING', created_at: trx.fn.now(), updated_at: trx.fn.now(),
+          });
+          failIf('staff_file_scan_insert');
+        });
+
+        // 11. Sanitized staff-facing response (no key/etag/version/filename_disk).
+        return res.status(201).json({ data: {
+          file_id: fileId, scan_state: 'PENDING', status: 'pending_scan',
+          ...(associationId ? { association_id: associationId } : {}),
+          message: 'Document stored and queued for malware scanning; not publicly downloadable.',
+        } });
+      } catch (error) {
+        // Orphan cleanup: remove the stored file if a later step failed.
+        if (storedFileIds.length && filesService) {
+          for (const id of storedFileIds) {
+            try { failIf('staff_cleanup'); await filesService.deleteOne(id); }
+            catch (e) { logger.error(e, `gm-intake/staff-files: failed to clean up orphaned file ${id}`); }
+          }
+        }
+        const code = error.code;
+        if (code === 'INVALID_REQUEST' || code === 'VALIDATION_FAILED' || code === 'PAYLOAD_TOO_LARGE') return next(error);
+        logger.error(error, 'gm-intake/staff-files failed');
         return next(new SubmissionError());
       }
     });
