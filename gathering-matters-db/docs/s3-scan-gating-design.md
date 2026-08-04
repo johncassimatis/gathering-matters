@@ -474,6 +474,19 @@ AWS Paid-plan upgrade; live GuardDuty scan test (clean + EICAR only with explici
 production role-by-role smoke test (admins bypass, so ordinary-role tokens); confirm Admin Access
 is limited to the 2 trusted users; SNS email confirmation.
 
+## Staff-managed scan upload (fills the clean-file test gap)
+The public `gm-intake` multipart path is the only creator of `file_scan` rows, so with public
+uploads disabled there was no supported way to put one benign document through the scan workflow
+(a plain `/files` upload creates the object but no `file_scan` row, leaving GuardDuty's event
+unmatched -> retried -> DLQ). `POST /gm-intake/staff-files` (flag `GM_STAFF_FILE_UPLOADS_ENABLED`,
+default off) closes this: an authenticated administrator or an allowlisted role
+(`GM_STAFF_FILE_UPLOAD_ROLE_IDS`) uploads exactly one supported document into Pending and the route
+creates the matching `file_scan(PENDING, origin=STAFF_MANAGED, object_key=<S3 key>)`, reusing the
+public path's validation, storage, and read-after-write identity logic. It is never anonymous and
+never the public intake path. A `submission_file` association is optional (`file_scan` has no
+submission FK). Raw-SQL `file_scan` seeding is unsupported (bypasses validation + identity capture).
+See `infra/aws/DIRECTUS_RENDER_HANDOFF.md` for the controlled clean-file test procedure.
+
 ## Rollback
 Flags OFF instantly revert behaviour. `node tools/provision-scan-file-permissions.mjs --rollback`
 removes the managed permissions/policies/access (folders left, may hold files). Stack teardown =

@@ -100,3 +100,22 @@ test('malformed JSON is conclusively invalid and can be deleted', async () => {
   const result = await processScanMessage({ msg: { Body: '{bad' }, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
   assert.deepEqual(result, { ack: true, disposition: 'invalid' });
 });
+
+test('a STAFF_MANAGED pending scan is matched by object_key, released to Clean Staff Review, and idempotent', async () => {
+  // The staff-managed upload route creates exactly this row shape:
+  // origin STAFF_MANAGED, PENDING, object_key = the S3 object key. The consumer
+  // matches on object_key regardless of origin.
+  const staffScan = { ...baseScan, origin: 'STAFF_MANAGED' };
+  const db = fakeDatabase(staffScan);
+  const msg = { Body: JSON.stringify(event('NO_THREATS_FOUND')), Attributes: { ApproximateReceiveCount: '1', SentTimestamp: String(Date.now()) } };
+  const r = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.equal(r.ack, true);
+  assert.equal(r.disposition, 'applied');
+  assert.equal(r.releasedToStaffReview, true);
+  assert.equal(db.state.rows.file_scan[0].scan_status, 'NO_THREATS_FOUND');
+  assert.equal(db.state.rows.directus_files[0].folder, 'REVIEW'); // Clean Staff Review — never Public Downloads
+  // Replaying the same event id is idempotent (no second transition).
+  const replay = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.equal(replay.disposition, 'ignore-duplicate');
+  assert.equal(db.state.rows.directus_files[0].folder, 'REVIEW');
+});
