@@ -487,6 +487,36 @@ never the public intake path. A `submission_file` association is optional (`file
 submission FK). Raw-SQL `file_scan` seeding is unsupported (bypasses validation + identity capture).
 See `infra/aws/DIRECTUS_RENDER_HANDOFF.md` for the controlled clean-file test procedure.
 
+## V009 runtime grants (required) + permission-denied recovery
+The V009 tables `file_scan` and `submission_file` are **owned by `gm_migrator`**. Migration
+ownership does **not** grant the Directus runtime role `gm_directus` any access, and this project
+keeps runtime grants in **provisioning**, not migrations. So after applying V009 you MUST run
+`gathering-matters-db/provisioning/07_directus_scan_table_grants.sql`, or the first scan path to
+touch the table fails with `permission denied for table file_scan` — both the `gm-intake` insert
+and the `gm-scan-consumer` `SELECT ... FOR UPDATE`, so events cannot be processed and eventually
+dead-letter.
+
+Least-privilege matrix (nothing broader; `ALL PRIVILEGES` is prohibited):
+
+| Table | gm_directus privileges | Why not more |
+|---|---|---|
+| `file_scan` | `SELECT, INSERT, UPDATE` | no `DELETE` (FK `ON DELETE CASCADE` from `directus_files` removes rows), no `TRUNCATE`/`REFERENCES`/`TRIGGER`/ownership |
+| `submission_file` | `SELECT, INSERT` | no `UPDATE`/`DELETE` (append-only; cascades from `submission`) |
+
+Verify ACLs read-only with `has_table_privilege('gm_directus','public.file_scan','SELECT')` etc.
+(`gathering-matters-db/tests/test_v009_scan_grants.sql` asserts the exact matrix). The provisioning
+script is idempotent and self-verifies (fails closed on missing role/table, incomplete, or
+over-privileged grants).
+
+**Recover from a permission-denied consumer incident:** (1) disable the consumer
+(`GM_SCAN_CONSUMER_ENABLED=false`) to stop repeated failures; (2) apply `07_...grants.sql` with the
+privileged provisioning identity and verify with `has_table_privilege`; (3) remove any orphaned
+GuardDuty event that dead-lettered for a since-deleted test object — receive it from the DLQ, prove
+it correlates (account `025452941754`, region `us-west-2`, prod bucket, the failed-test object key,
+no `file_scan`/`directus_files` row, not the validation object) and delete only that one message by
+receipt handle (never purge the queue); (4) confirm main+DLQ are `0/0/0` and the DLQ alarm returns to
+`OK`; (5) re-enable the consumer and observe empty-queue cycles.
+
 ## Rollback
 Flags OFF instantly revert behaviour. `node tools/provision-scan-file-permissions.mjs --rollback`
 removes the managed permissions/policies/access (folders left, may hold files). Stack teardown =
