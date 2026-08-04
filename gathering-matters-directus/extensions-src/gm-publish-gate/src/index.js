@@ -161,7 +161,13 @@ export default ({ filter }, { database, env, logger }) => {
   // Direct folder edits cannot bypass the editorial state machine. Staff may
   // still manage files through the normal authenticated workflow, but public
   // placement is only valid when every current gate is true.
-  filter('directus_files.items.update', async (payload, meta, context) => {
+  //
+  // Event name: Directus derives the hook scope from the collection. For the
+  // `directus_files` SYSTEM collection it strips the `directus_` prefix and does
+  // NOT use the `.items` infix (ItemsService: eventScope = collection.substring(9)),
+  // so file updates emit `files.update` — not `directus_files.items.update`.
+  // (User collections above correctly use `<collection>.items.update`.)
+  filter('files.update', async (payload, meta, context) => {
     const trx = context?.database || database;
     for (const fileId of meta.keys || []) {
       const patch = payloadForKey(payload, fileId);

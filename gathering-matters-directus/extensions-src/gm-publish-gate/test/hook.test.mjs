@@ -35,9 +35,20 @@ function registered(state) {
   return filters;
 }
 
+test('registers the real Directus event names (system collection = files.update, no .items infix)', () => {
+  const names = [...registered({ updates: [] }).keys()];
+  // directus_files is a SYSTEM collection: Directus emits `files.update`, so the
+  // manual public-placement guard MUST register that exact name or it is dead code.
+  assert.ok(names.includes('files.update'), `expected files.update to be registered; got ${names.join(', ')}`);
+  assert.ok(!names.includes('directus_files.items.update'), 'directus_files.items.update is never emitted by Directus');
+  // User collections keep the `<collection>.items.<action>` form.
+  assert.ok(names.includes('content_item_file.items.update'));
+  assert.ok(names.includes('content_item.items.update'));
+});
+
 test('manual public-folder placement is blocked when no clean published download exists', async () => {
   const state = { scan: { origin: 'PUBLIC_SUBMISSION' }, rows: [], updates: [] };
-  const handler = registered(state).get('directus_files.items.update');
+  const handler = registered(state).get('files.update');
   await assert.rejects(
     handler({ folder: 'public' }, { keys: ['file-1'] }, {}),
     /cannot enter the requested public state/,

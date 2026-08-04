@@ -160,12 +160,68 @@ and the read-after-write identity capture; this route reuses the proven intake l
 - **Production clean-path result:** clean artifact remains reviewable by authenticated staff,
   did NOT auto-publish (Public Downloads=0), anonymous `/assets` denied (403), public
   `/gm-library/downloads` denied (404). Six extensions load; 0 permission/gate errors; queues 0/0/0.
-- **Disposable unsafe-status matrix:** certified via the real-extension unit suites (71/71),
-  including the `gm-publish-gate` exhaustive folder-placement truth table (non-clean ->
-  Pending; clean-only -> Clean Staff Review; clean+published+is_download+active -> Public Downloads).
+- **Disposable unsafe-status matrix:** see the dedicated "Disposable scan-gating
+  certification" section below (real Directus 12.0.2 + PG18 stack, actual HTTP routes).
 - **Still disabled:** public uploads and staff uploads remain OFF.
 - **Launch gate:** the production threat-positive (`THREATS_FOUND`) GuardDuty test remains
   PENDING approval of the exact harmless test artifact/procedure; public launch stays blocked
   until it is completed. This account runs Malware Protection for S3 as an independent feature
   (no detector), so a threat produces the EventBridge scan-result event + object tag + SNS alert,
   but no GuardDuty finding.
+
+## Disposable scan-gating certification (2026-08-04)
+
+Certified against a real disposable stack, not mocks: `postgres:18-alpine` +
+`directus/directus:12.0.2` built from this repo (all six extensions loaded),
+full Flyway migrations `V001-V009` applied as `gm_migrator`, provisioning grant
+scripts `01-07` applied (tables owned by `gm_migrator`, runtime grants to
+`gm_directus`), the three managed folders created, and `GM_SCAN_GATING_ENABLED=true`
+with prod-matching flags. Matrix fixtures for every representable scan/publish/
+association state were inserted by raw SQL **in the disposable DB only** (states
+like specific `scan_status` values, an absent scan row, wrong-folder placement,
+future publish dates, and `is_download=false` cannot be produced through the API
+with uploads disabled). Runtime reads execute as `gm_directus`.
+
+- **Public download route (`GET /gm-library/downloads/:fileId`, anonymous):** all
+  16 states probed. Every unsafe state — missing scan row, `PENDING`,
+  `THREATS_FOUND`, `FAILED`, `UNSUPPORTED`, `ACCESS_DENIED`, clean-but-draft,
+  clean-but-archived, clean-but-future-dated, `is_download=false`, no submission
+  association, `STAFF_MANAGED` origin, clean-in-Public-folder-without-association,
+  threat-in-Clean-Review-folder — returns `404` with a byte-identical
+  `{"error":"not_found"}` body (no leak of which condition failed). Only the fully
+  eligible state (`NO_THREATS_FOUND` + `PUBLIC_SUBMISSION` + published + `published_at<=now`
+  + `is_download=true` + submission association) returns `200` and streams the file.
+  Folder placement never affects this route — it re-checks live DB state.
+- **Anonymous `/assets/:id`:** `403` for all 16 files including the eligible one
+  (public delivery flows only through the custom route).
+- **Detail route (`GET /gm-library/items/:slug`, anonymous):** lists a downloadable
+  file only for the eligible state; every unsafe state yields `files: []`, and an
+  unpublished item is `404`.
+- **Idempotency / info-leak:** repeated eligible download is stably `200`; denial
+  bodies are identical across all reasons.
+
+### Defect found and fixed (PR #9, not yet deployed)
+The `gm-publish-gate` manual "move to Public Downloads folder" guard registered the
+Directus event `directus_files.items.update`, which Directus never emits: for the
+`directus_files` **system** collection the hook scope is `files.update` (no
+`directus_` prefix, no `.items` infix). The guard was dead code — a staff user
+could move any file (incl. `STAFF_MANAGED` or a `THREATS_FOUND` public submission)
+straight into the Public Downloads folder. This was **not** an anonymous
+public-exposure hole (the download route and revoked `/assets` are folder-independent,
+proven above), but a broken documented control. Fix registers `files.update`; verified
+in the disposable that `STAFF_MANAGED->Public` and `THREATS->Public` now return `422`
+and the file stays out of Public, while the eligible file is still allowed. A regression
+test asserts the real event name is registered.
+
+### Not exercisable in the disposable (stated blockers)
+- The **collection-mutation** folder hooks (`content_item{,_file}.items.*`) require
+  `content_item`/`content_item_file` to be registered Directus collections. This repo
+  ships **no Directus schema snapshot**, and Directus 12 does not auto-register existing
+  Postgres tables, so those `/items/*` routes are not reachable from a clean bootstrap
+  (0 registered collections). Their event names are correct (verified against the
+  Directus source) and their logic is covered by the `gm-publish-gate` unit truth table.
+- The **S3 version/ETag** fail-closed branch (`GM_PUBLIC_DOWNLOAD_REQUIRE_VERSION/ETAG`)
+  is `s3`-storage only; the disposable used `local` storage, so it was not exercised
+  here (covered by the committed MinIO integration test + unit logic).
+- Unit suites: 72/72 pure-logic tests pass (`node --test`), including the new
+  `files.update` regression guard.
