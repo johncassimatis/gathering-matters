@@ -1,826 +1,284 @@
 # Gathering Matters
 
-> This README is project onboarding guidance for this repository, not a replacement for official Flyway, Neon, or Directus documentation.
+Monorepo for the Gathering Matters content platform: a Flyway-managed PostgreSQL schema, a
+Directus 12 runtime with six custom extensions, and the public Framer submission forms.
 
-This is a monorepo with two subprojects:
+| Directory | What it owns | Its own README |
+|---|---|---|
+| `gathering-matters-db/` | PostgreSQL schema. Flyway migrations are the **only** way structure changes. | — |
+| `gathering-matters-directus/` | Directus 12 runtime: Docker image, extensions, API tests. | — |
+| `gathering-matters-directus/tag-sync/` | Directus → Framer tag sync + removal reconciliation. | [`tag-sync/README.md`](gathering-matters-directus/tag-sync/README.md) |
+| `framer/` | Source of truth for the two public submission form components. | [`framer/README.md`](framer/README.md) |
+| `scripts/` | Repo-root wrappers (`npm run sync:framer-tags*`). | — |
+| `gathering-matters-db/docs/` | Framer integration architecture + Phase 0 spike results. | — |
 
-* **`gathering-matters-db/`** — PostgreSQL schema and Flyway migrations. Source of truth for
-  database *structure*. Structural changes go through SQL migrations in
-  `gathering-matters-db/migrations/`, never manually through a client.
-* **`gathering-matters-directus/`** — the Directus 12 runtime: Docker Compose, the three custom
-  extensions (`gm-library`, `gm-intake`, `promote-submission`), and bootstrap. Source of truth for
-  the CMS/runtime and its configuration.
+**Current stack:** Neon PostgreSQL 18 (`neondb`, `uuidv7()` PKs) · Flyway Community 12.8.2-rc2175 ·
+Directus 12.0.2 · Node 20+.
 
-The two are coupled by one ordering rule: some migrations depend on Directus system tables, so the
-database and Directus have to be brought up in a specific interleaved order. That sequence is in
-**Migration ordering and the Directus bootstrap boundary** below, and it is the first thing to read
-before setting up a fresh branch.
+**Working directory matters.** Flyway runs from `gathering-matters-db/`; `docker compose` runs from
+`gathering-matters-directus/`. Every command block below is labelled.
 
-Working directory matters: Flyway commands run from `gathering-matters-db/` (where `flyway.toml`
-lives); `docker compose` commands run from `gathering-matters-directus/` (where
-`docker-compose.yml` lives). Each command block below is labelled with the directory it runs in.
+---
 
-Current setup:
+## Read this first: the Directus bootstrap boundary
 
-* Database: Neon PostgreSQL, database `neondb`, Postgres 18 (`uuidv7()` primary keys)
-* Migration tool: Flyway Community Edition 12.8.2-rc2175
-* CMS/runtime: Directus 12.0.2 (production branch bootstrapped through V005)
-* Workflow: SQL-first migrations reviewed through GitHub; personal Neon branches before explicit production promotion
-
-The Neon branch formerly named `development` is now `production`. It is the root branch and should
-be protected in Neon. Personal branches are reset from production for testing. Once production holds
-client content, never promote schema by restoring a dev snapshot onto production; use Flyway
-migrations from `main` so content is preserved.
-
-> Bootstrap-boundary reminder: migrations V004 and later reference Directus system tables
-> (`directus_users`, `directus_files`) and cannot be applied to a branch until Directus has
-> bootstrapped that branch. See the boundary section before migrating a fresh branch.
-
-## Repository structure
+Migrations V004+ reference Directus system tables (`directus_users`, `directus_files`), so the
+database and Directus must be brought up **interleaved**. V004 has a guard that raises a clear error
+if those tables are missing — hitting it is expected, not a bug.
 
 ```text
-gathering-matters/                          monorepo root
-├─ .gitignore
-├─ README.md                                (this file)
-├─ gathering-matters-db/
-│  ├─ flyway.toml                           shared Flyway config, no secrets
-│  ├─ flyway.user.toml.example              template for local credentials
-│  ├─ flyway.user.toml                      local credentials, git ignored
-│  ├─ provisioning/                         one-time manual admin scripts, NOT Flyway migrations
-│  │  ├─ 01_dev_roles.sql                   gm_migrator + developer login roles
-│  │  ├─ 02_directus_role_setup.sql         gm_directus service role + bootstrap grants
-│  │  └─ 03_directus_post_bootstrap_grants.sql  REFERENCES + scoped gm_directus app grants
-│  ├─ tests/
-│  │  └─ verification.sql                   schema-invariant checks (reporting-oriented)
-│  └─ migrations/
-│     ├─ V001_20260610225550__create_initial_schema.sql
-│     ├─ V002_20260623141610__add_content_submissions_and_types.sql
-│     ├─ V003_20260623141647__keyset_indexes_placement_risk_event.sql
-│     ├─ V004_20260629194749__directus_relations_privacy_audit_files.sql   (post-bootstrap)
-│     └─ V005_20260629195805__audit_event_immutable.sql                    (post-bootstrap)
-└─ gathering-matters-directus/
-   ├─ .env.example                          template for Directus runtime env, git ignored as .env
-   ├─ docker-compose.yml
-   └─ extensions-src/                        editable extension source (built artifacts are git ignored)
-      ├─ gm-intake/        (src/index.js, package.json, package-lock.json)
-      ├─ gm-library/       (src/index.js, package.json, package-lock.json)
-      └─ promote-submission/ (src/api.js, src/app.js, package.json, package-lock.json)
+V001–V003   pre-bootstrap    plain application schema
+--- Directus bootstrap ---
+V004–V009   post-bootstrap   reference directus_users / directus_files
 ```
 
-Migration files live in `gathering-matters-db/migrations/`. Versions use an ordinal plus timestamp
-(`V00N_<timestamp>`) so they both sort deterministically and stay human-readable. V001–V003 are
-pre-bootstrap; V004–V005 depend on Directus system tables (see the bootstrap-boundary section).
-
-Role/access setup lives in `gathering-matters-db/provisioning/` as manual admin scripts run by the
-project owner as `neondb_owner`. They are not Flyway migrations.
-
-## One-time setup (database / Flyway)
-
-This section sets up Flyway against the database. Directus setup is a separate section further
-down (Getting Directus running).
-
-### 1. Install Flyway CLI
-
-Install the Flyway CLI locally.
-
-Check your version:
-
-```bash
-flyway -v
-```
-
-This repo was started with:
+Full sequence for a **fresh branch** (e.g. after resetting a personal Neon branch). Directory in brackets:
 
 ```text
-Flyway Community Edition 12.8.2-rc2175
+1. [db]       flyway migrate -target=003_20260623141647          through the last pre-bootstrap migration
+2. [db]       run provisioning/02_directus_role_setup.sql        as neondb_owner — gm_directus must exist BEFORE bootstrap
+3. [directus] docker compose run --rm directus bootstrap
+              docker compose up -d directus                       creates the directus_* system tables
+4. [db]       run provisioning/03_directus_post_bootstrap_grants.sql   as neondb_owner — REFERENCES for gm_migrator
+5. [db]       flyway migrate                                      applies V004 … V009
+6. [db]       run provisioning/04_ and 05_                        as neondb_owner — gm_directus app-table grants
+7. [db]       run provisioning/06_test_runner_role.sql            optional; only if running the API test suite
 ```
 
-Use this same version if possible. A compatible Flyway 12.x version should also work for normal development.
+Steps 6 and 7 must come **after** step 5 — they grant on `content_item_file` and `audit_event`,
+which V004 creates. Skipping step 6 leaves Directus running but every custom endpoint failing with
+permission-denied.
 
-### 2. Clone the repo
+If your branch is already bootstrapped and you're only adding a pre-bootstrap migration, a plain
+`flyway migrate` is fine. The boundary only matters when post-bootstrap migrations are pending on a
+branch with no `directus_*` tables.
+
+---
+
+## Database setup (`gathering-matters-db/`)
+
+```text
+DIRECTORY: gathering-matters-db
+```
 
 ```bash
-git clone <monorepo-url>        # confirm the actual monorepo URL; the DB is no longer its own repo
-cd gathering-matters
+cp flyway.user.toml.example flyway.user.toml   # PowerShell: Copy-Item
+flyway info                                    # defaults to your personal branch
 ```
 
-Flyway work happens in the database subproject:
-
-```bash
-cd gathering-matters-db
-```
-
-### 3. Create your local credentials file
-
-Copy the example credentials file:
-
-```bash
-cp flyway.user.toml.example flyway.user.toml
-```
-
-On Windows PowerShell:
-
-```powershell
-Copy-Item flyway.user.toml.example flyway.user.toml
-```
-
-Then fill in your personal Neon branch URL, Neon/Postgres username, and password in
-`flyway.user.toml`.
-
-Each developer uses their own limited login role.
-
-Example for Pierce:
+Fill in your personal Neon branch URL, login role, and password:
 
 ```toml
 [environments.personal]
-url = "jdbc:postgresql://YOUR_PIERCE_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
-user = "pierce_dev"
+url = "jdbc:postgresql://YOUR_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
+user = "your_dev_login"     # pierce_dev / aaron_dev
 password = "your-password"
 ```
 
-Example for Aaron:
+Use the Neon **direct** endpoint, not `-pooler` — Flyway needs a persistent session.
+Never commit `flyway.user.toml`. Never use `neondb_owner` for normal work.
 
-```toml
-[environments.personal]
-url = "jdbc:postgresql://YOUR_AARON_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
-user = "aaron_dev"
-password = "your-password"
-```
-
-Do not commit `flyway.user.toml`.
-
-Do not use `neondb_owner` for normal Flyway work. `neondb_owner` is only for one-time administrative setup, such as creating roles or changing role passwords.
-
-### 4. Confirm database URLs
-
-The production database URL lives in `flyway.toml` under `[environments.production]`.
-
-Use the Neon direct endpoint, not the `-pooler` endpoint. Flyway migrations need a persistent database session.
-
-The URL format is:
+### Roles
 
 ```text
-jdbc:postgresql://<neon-host>/neondb?sslmode=require
+developer login (pierce_dev / aaron_dev) → SET ROLE gm_migrator → run migrations
 ```
 
-The production URL belongs in `flyway.toml`. Personal branch URLs, usernames, and passwords belong
-only in `flyway.user.toml`.
+`initSql = "SET ROLE gm_migrator"` in `flyway.toml` means every migration runs as the shared
+`gm_migrator` role, so schema objects are owned consistently regardless of who applied them.
+`gm_migrator` is `NOLOGIN`.
 
-The default Flyway environment is `personal`, so a bare Flyway command should target your personal
-branch. Production must be targeted deliberately with `-environment=production`.
+`gm_directus` is the separate `LOGIN` role the Directus container connects as. Ownership is
+deliberately split: **`gm_migrator` owns the application schema, `gm_directus` owns the
+`directus_*` system tables** it creates at bootstrap. `gm_directus` gets least-privilege grants on
+application tables — never ownership, never DDL, never Flyway. Its credentials live only in the
+Directus `.env`.
 
-## Database roles
-
-The database uses separate login roles and a shared migration role.
-
-Each developer logs in with their own role, such as:
+All role setup is manual, run once per branch by the project owner as `neondb_owner`. **Never put
+roles, passwords, or grants in `migrations/`.**
 
 ```text
-pierce_dev
-aaron_dev
+provisioning/01_dev_roles.sql                       gm_migrator + developer logins
+provisioning/02_directus_role_setup.sql             gm_directus (BEFORE bootstrap)
+provisioning/03_directus_post_bootstrap_grants.sql  REFERENCES for gm_migrator (AFTER bootstrap)
+provisioning/04_directus_grants_on_content_table.sql    gm_directus read/write on app tables (AFTER V004)
+provisioning/05_directus_editorial_workflow_grants.sql  gm_directus editorial grants (AFTER V004)
+provisioning/06_test_runner_role.sql                gm_test_runner (AFTER V006)
 ```
 
-Flyway then runs:
+### Personal branches
 
-```sql
-SET ROLE gm_migrator;
-```
+Each developer has a personal Neon branch reset from the `production` root branch. Reset it from the
+Neon console before starting a schema change — it's a destructive refresh, which is the point.
 
-through the shared `flyway.toml` config.
+Do **not** use `flyway clean`; it's disabled in config and should stay disabled.
 
-This means migrations are executed as `gm_migrator`, so schema objects are owned consistently by one shared migration role instead of by whichever developer happened to run the migration.
+---
 
-The normal access model is:
+## Directus runtime (`gathering-matters-directus/`)
 
-```text
-developer login role -> SET ROLE gm_migrator -> run migrations
-```
-
-`gm_migrator` is a `NOLOGIN` role, so nobody connects directly as it.
-
-### The Directus runtime role (`gm_directus`)
-
-Once Directus is bootstrapped against a branch, a second service role exists: `gm_directus`.
-This is a `LOGIN` role that the Directus container connects as. It is deliberately **not** part
-of the developer migration flow:
-
-* It **owns the `directus_*` system tables** it creates during bootstrap. This is the one place
-  ownership is intentionally split: `gm_migrator` owns the application schema, `gm_directus` owns
-  the Directus system schema.
-* It holds only least-privilege grants on the application tables the custom endpoints actually
-  query, not ownership and not DDL. It never runs Flyway migrations.
-* Its credentials live only in the Directus repo's runtime environment (`.env`), never in `flyway.user.toml`.
-
-`gm_directus` and its bootstrap-time grants are created by
-`provisioning/02_directus_role_setup.sql`, run once per branch **before** Directus bootstraps
-(Directus connects as `gm_directus`, so the role must exist first).
-
-Because ownership is split, a second manual step is required **after** bootstrap: `gm_migrator`
-must be able to add foreign keys pointing at the `gm_directus`-owned Directus tables, and
-`gm_directus` needs its scoped read/write grants on the application tables the endpoints query.
-Both are in `provisioning/03_directus_post_bootstrap_grants.sql`, which includes:
-
-```sql
--- run as neondb_owner AFTER Directus bootstrap, BEFORE V004
-GRANT REFERENCES ON directus_users, directus_files TO gm_migrator;
--- plus the least-privilege application-table grants for gm_directus
-```
-
-Do not put `gm_directus`, its grants, or the `REFERENCES` grant inside `migrations/`; they are
-manual provisioning steps, the same as the developer roles.
-
-Role setup is documented across the provisioning scripts:
-
-```text
-provisioning/01_dev_roles.sql                    gm_migrator + developer login roles
-provisioning/02_directus_role_setup.sql          gm_directus + bootstrap grants (run before bootstrap)
-provisioning/03_directus_post_bootstrap_grants.sql  REFERENCES + gm_directus app grants (run after bootstrap)
-```
-
-These are not Flyway migrations. They are one-time manual setup scripts run by the project owner as `neondb_owner`.
-
-Do not put role creation, login creation, or real passwords in `migrations/`.
-
-## Neon access vs database access
-
-Neon project access and Postgres database access are separate.
-
-Neon project access is used for control-plane work, such as:
-
-* viewing branches
-* creating branches
-* resetting a personal branch from its parent
-* copying branch connection details
-
-Postgres database access is used for connecting to the database and running Flyway.
-
-Normal Flyway work should still use a limited login role such as `pierce_dev` or `aaron_dev`, not `neondb_owner`.
-
-Personal Neon branches have already been created. You do not need to create a branch as part of
-initial setup. You should familiarize yourself with how to keep that branch up to date by resetting
-it from the production parent before testing new migrations.
-
-## Personal Neon branches
-
-Each developer has a personal Neon branch for testing migrations before they are merged and applied
-to production.
-
-The current model is:
-
-```text
-production   root production branch
-pierce_dev   Pierce's personal testing branch
-aaron_dev    Aaron's personal testing branch
-```
-
-The personal branch is a private copy of production. It lets you test a migration safely without
-touching the live database.
-
-The committed `flyway.toml` includes a `personal` environment, but each developer's actual personal branch URL stays local in their git-ignored `flyway.user.toml`.
-
-Add this to your local `flyway.user.toml`:
-
-```toml
-[environments.personal]
-url = "jdbc:postgresql://YOUR_PERSONAL_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
-user = "your_dev_login"
-password = "your_dev_password"
-```
-
-Example for Pierce:
-
-```toml
-[environments.personal]
-url = "jdbc:postgresql://YOUR_PIERCE_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
-user = "pierce_dev"
-password = "your-password"
-```
-
-Example for Aaron:
-
-```toml
-[environments.personal]
-url = "jdbc:postgresql://YOUR_AARON_BRANCH_HOST.neon.tech/neondb?sslmode=require&channel_binding=require"
-user = "aaron_dev"
-password = "your-password"
-```
-
-Test your personal branch connection with:
-
-```bash
-flyway info -environment=personal
-```
-
-Apply test migrations to your personal branch with:
-
-```bash
-flyway migrate -environment=personal
-```
-
-The `SET ROLE gm_migrator` behavior for the personal environment is already defined in the shared
-`flyway.toml`, so objects created while testing should be owned by `gm_migrator`, the same as on
-production.
-
-### Keeping your personal branch up to date
-
-Before starting a new schema change, reset your personal branch from the production parent in the
-Neon console.
-
-For example:
-
-```text
-production -> pierce_dev
-production -> aaron_dev
-```
-
-Resetting from parent refreshes your personal branch to match the current production branch.
-
-This is a destructive refresh of the personal branch. Any test-only changes on your personal branch are discarded. That is expected.
-
-Do not use `flyway clean` to refresh a branch. `clean` is disabled in Flyway config and should stay disabled.
-
-Typical reset workflow:
-
-```text
-1. Make sure production is up to date with merged migrations.
-2. Reset your personal Neon branch from the production parent.
-3. Pull latest main locally.
-4. Create a Git branch.
-5. Add and test your migration on your personal branch.
-```
-
-## Migration ordering and the Directus bootstrap boundary
-
-This is the one place the "reset branch, then migrate" workflow is not a straight line, and it
-will fail confusingly if you skip it.
-
-The migration set is split across a Directus bootstrap boundary:
-
-```text
-V001 – V003   pre-bootstrap    plain application schema, no Directus dependency
---- Directus bootstrap happens here ---
-V004 – V005   post-bootstrap   reference directus_users / directus_files
-```
-
-V004 begins with a guard that raises a clear error if the Directus system tables are missing, so a
-straight `flyway migrate` on a branch that has not bootstrapped Directus will stop at V004 with a
-message telling you to bootstrap first. That is expected, not a bug.
-
-To bring a **fresh** branch (for example after resetting your personal branch) to the full current
-schema, the order interleaves the two subprojects. Directory in brackets:
-
-```text
-1. [db]       flyway migrate -environment=personal -target=003_20260623141647   (through last pre-bootstrap)
-2. [db]       run provisioning/02_directus_role_setup.sql as neondb_owner        (creates gm_directus; role must exist before bootstrap)
-3. [directus] docker compose run --rm directus bootstrap && docker compose up -d (creates directus_* system tables)
-4. [db]       run provisioning/03_directus_post_bootstrap_grants.sql as neondb_owner (REFERENCES + gm_directus app grants)
-5. [db]       flyway migrate -environment=personal                                (applies V004 and V005)
-```
-
-If you are only testing a **new** pre-bootstrap migration and your branch already has Directus
-bootstrapped (or you are not touching V004+), a plain `flyway migrate -environment=personal` is
-fine. The boundary only matters when a branch has the post-bootstrap migrations pending but no
-Directus system tables yet.
-
-Note on production resets: a personal branch inherits whatever state production is in at reset time.
-Production is already bootstrapped and migrated through V005 as of the branch rename.
-
-## Getting Directus running (`gathering-matters-directus/`)
-
-This is the runtime side of the fresh-branch sequence above. It assumes the branch already has
-V001–V003 applied and `gm_directus` created (steps 1–2).
-
-Prerequisites: Docker Desktop, and Node.js (to build the extensions).
-
-### 1. Configure the runtime environment
+Prerequisites: Docker Desktop.
 
 ```text
 DIRECTORY: gathering-matters-directus
 ```
 
 ```bash
-cp .env.example .env        # (PowerShell: Copy-Item .env.example .env)
-```
-
-Fill in `.env`. The decisions that matter, beyond the values `.env.example` lists:
-
-* `DB_USER=gm_directus` and the **direct** Neon endpoint (not `-pooler`), `DB_SSL=true`. Directus
-  holds session state that Neon's transaction-mode pooler can break, and bootstrap is DDL.
-* Generate `KEY` and `SECRET` (two independent random values). PowerShell:
-  `[Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))` run twice.
-* Set `ADMIN_EMAIL` / `ADMIN_PASSWORD` so bootstrap creates the first admin non-interactively.
-* Leave `LICENSE_KEY` **empty** on local/personal branches. The OIG license binds to `PUBLIC_URL`
-  on first use, so it is reserved for the durable staging instance, not a resettable branch.
-* Extension secrets (`GM_SEARCH_CURSOR_SECRET`, `GM_RISK_HASH_SECRET`, `GM_SUBMISSION_CONSENT_VERSION`,
-  `GM_CONTACT_CONSENT_VERSION`) can stay unset for a first bootstrap; set them before exercising the
-  endpoints. Leave `GM_PROMOTION_ROLE_IDS` unset until the role matrix exists on staging; the
-  promotion operation safely refuses without it.
-
-Never commit `.env`.
-
-### 2. Bootstrap Directus
-
-```text
-DIRECTORY: gathering-matters-directus
-```
-
-```bash
+cp .env.example .env               # PowerShell: Copy-Item
+cp .env.test.example .env.test     # required even if you never run tests — see note below
 docker compose run --rm directus bootstrap
-docker compose up -d
+docker compose up -d directus
 docker compose logs -f directus
 ```
 
-`bootstrap` creates the `directus_*` system tables (owned by `gm_directus`) and the first admin.
-The Studio is then at `http://localhost:8055`. The repeated `Could not set primary key ... unknown
-table` lines for the application tables are expected and harmless: Directus is declining to manage
-tables it hasn't been told are collections.
+> The compose file defines a `test-runner` service with `env_file: .env.test`. Docker Compose
+> validates every service's env file, so **a bare `docker compose up -d` fails if `.env.test` is
+> missing** — even though you only wanted Directus. Create it, or target the service explicitly
+> (`docker compose up -d directus`).
 
-After bootstrap, return to step 4 of the boundary sequence (run
-`03_directus_post_bootstrap_grants.sql`), then step 5 (`flyway migrate` for V004/V005).
+Filling in `.env` — the decisions that matter beyond the listed values:
 
-### 3. Build and mount the extensions
+* `DB_USER=gm_directus`, the **direct** Neon endpoint (not `-pooler`), `DB_SSL=true`. Directus holds
+  session state that Neon's transaction pooler breaks, and bootstrap is DDL.
+* Generate `SECRET` as a long random value. PowerShell:
+  `[Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))`
+* Set `ADMIN_EMAIL` / `ADMIN_PASSWORD` so bootstrap creates the first admin non-interactively.
+* Leave `LICENSE_KEY` **empty** on personal branches — the OIG license binds to `PUBLIC_URL` on
+  first use, so it's reserved for the durable staging instance.
+* `GM_RISK_HASH_SECRET` and `GM_SEARCH_CURSOR_SECRET` must be set before the endpoints work.
+* `GM_*_CONSENT_VERSION` silently defaults to `v1` if unset — set it deliberately, it's stamped onto
+  every stored consent record.
+* `GM_PROMOTION_ROLE_IDS` can stay unset until the role matrix exists; the promotion operation
+  safely refuses without it.
+* `CORS_ENABLED` / `CORS_ORIGIN` must list every browser origin that calls the API (Framer plugin
+  CDN origin, published site origin, preview origin) as a comma-separated allowlist. Never `*`.
 
-The three extensions live in `extensions-src/`. Build each, then stage `package.json` + `dist/`
-into the Docker-mounted extensions directory as a folder named `directus-extension-<name>` (Directus
-only loads folders with that prefix). Built artifacts are git ignored and regenerated; the committed
-`package-lock.json` files pin the toolchain for reproducible installs (`npm ci` uses them).
+Never commit `.env` or `.env.test`.
 
-```text
-DIRECTORY: gathering-matters-directus/extensions-src/<name>
-```
+### Extensions
 
-```bash
-npm ci            # or: npm install (uses the committed package-lock.json)
-npm run build     # produces dist/
-```
+Six extensions live in `extensions-src/`, all **baked into the Docker image** by the `Dockerfile`
+(`npm ci` from the committed lockfiles, then `directus-extension build`). There is no bind mount —
+the baked artifacts are what run.
 
-**Required for `gm-intake` and `promote-submission`:** both import from `@directus/errors`. Directus
-provides that package at runtime, but the bundler must resolve it at build time, so it has to be an
-exact-version dev dependency. In each of those two folders:
+| Extension | Type | Purpose |
+|---|---|---|
+| `gm-intake` | endpoint | public `POST /gm-intake/submissions` |
+| `gm-library` | endpoint | public read-only search + item detail |
+| `promote-submission` | operation | approved submission → draft content item |
+| `gm-scan-consumer` | hook | polls the GuardDuty SQS queue, clears scanned files |
+| `gm-publish-gate` | hook | moves files between folders as publication changes |
+| `gm-review` | endpoint | authenticated reviewer metadata |
 
-```bash
-npm install --save-dev --save-exact @directus/errors
-```
-
-`gm-library` does not import `@directus/errors` and does not need this. The `package-lock.json` files
-capture the dependency, so a clean `npm ci` restores it; the explicit install is only needed when
-setting a folder up from scratch.
-
-Stage the built output into the mounted directory (PowerShell example for one extension):
-
-```powershell
-New-Item -ItemType Directory -Force -Path ..\..\extensions\directus-extension-gm-library | Out-Null
-Copy-Item package.json ..\..\extensions\directus-extension-gm-library\ -Force
-Copy-Item dist          ..\..\extensions\directus-extension-gm-library\ -Recurse -Force
-```
-
-Repeat for `gm-intake` and `promote-submission`. Confirm `docker-compose.yml` mounts `./extensions`
-to `/directus/extensions`, and set `EXTENSIONS_MUST_LOAD=true` in `.env` so a failed extension makes
-Directus exit loudly instead of starting half-broken.
-
-### 4. Restart and verify the load
-
-```text
-DIRECTORY: gathering-matters-directus
-```
+The last three ship **feature-flagged off** (`GM_SCAN_CONSUMER_ENABLED`, `GM_SCAN_GATING_ENABLED`,
+`GM_PUBLIC_FILE_UPLOADS_ENABLED` all default `false`). They load either way — the flags gate
+behaviour, not loading. Rebuild with:
 
 ```bash
-docker compose up -d --force-recreate
-docker compose logs -f directus
+docker compose build directus && docker compose up -d --force-recreate directus
 ```
 
-The container staying up (with `EXTENSIONS_MUST_LOAD=true`) means all three loaded. Then probe:
+To iterate on an extension without rebuilding, build it locally into `./extensions/` and opt into the
+bind-mount override (deliberately *not* named `docker-compose.override.yml`, so it never loads
+silently):
 
-```powershell
+```bash
+docker compose -f docker-compose.yml -f docker-compose.staged-extensions.yml up -d directus
+```
+
+Set `EXTENSIONS_MUST_LOAD=true` in `.env` so a failed extension makes Directus exit loudly rather
+than start half-broken. Verify the load:
+
+```bash
 curl.exe -i http://localhost:8055/gm-library/search
 ```
 
-* `500 {"error":"search_unavailable"}` means the route loaded and hit its cursor-secret guard
-  (expected when `GM_SEARCH_CURSOR_SECRET` is unset).
-* `200` with an empty feed means the route loaded and the secret is set.
-* `404` means the extension did not load. Check the logs for the named failure.
+* `500 {"error":"search_unavailable"}` — route loaded, `GM_SEARCH_CURSOR_SECRET` unset.
+* `200` with an empty feed — route loaded, secret set.
+* `404` — the extension did not load. Check the logs.
+
+### API tests
+
+```bash
+cp .env.test.example .env.test     # fill in gm_test_runner credentials
+npm ci
+npm run test:render                # seeds, runs vitest, cleans up, writes test_run_audit
+```
+
+Requires `gm_test_runner` (provisioning/06) and V006 applied. **Set `GM_TEST_MODE=true` on the
+Directus instance under test** — without it the intake endpoint doesn't tag `risk_event` rows with a
+run id, cleanup can't remove them, and the endpoint's 5-per-hour rate limit will fail the next run
+inside the same hour.
+
+---
 
 ## Daily commands
 
-Run these from `gathering-matters-db/`.
-
-Check migration status on your personal branch:
-
-```bash
-flyway info
+```text
+DIRECTORY: gathering-matters-db
 ```
 
-Validate migration files against your personal branch:
+`personal` is the default environment, so a bare command targets your branch:
 
 ```bash
-flyway validate
+flyway info        # migration status
+flyway validate    # check files against the database
+flyway migrate     # apply pending migrations
+flyway add -description=add_content_items   # scaffold a new migration
 ```
 
-Apply pending migrations to your personal branch:
+Target production deliberately: `flyway migrate -environment=production`, only from `main`, only
+after the migration is merged.
 
-```bash
-flyway migrate
-```
-
-Because `personal` is the default environment, a bare command targets your personal branch.
-
-To target production, add:
-
-```bash
--environment=production
-```
-
-Examples:
-
-```bash
-flyway info -environment=production
-flyway validate -environment=production
-flyway migrate -environment=production
-```
-
-Only run production migrations deliberately from `main`, after the migration has been tested on a
-personal branch and merged.
-
-For normal onboarding, new developers should start with:
-
-```bash
-flyway info
-flyway validate
-```
-
-Do not run `flyway migrate -environment=production` until the team is ready to apply merged
-migrations from `main`.
-
-## Repair command
-
-`flyway repair` exists, but it is **not** part of the normal workflow.
-
-Use it only when Flyway's schema history table needs to be repaired, such as after a failed migration attempt or after a maintainer has intentionally resolved a checksum mismatch.
-
-```bash
-flyway repair
-```
-
-Important:
-
-* Do not use `repair` to casually bypass Flyway errors.
-* Do not use `repair` because you edited an already-applied migration and want Flyway to stop complaining.
-* Do not run `repair` on a shared database unless the team understands why it is needed.
-* `repair` changes Flyway's migration history metadata. It does not fix the actual database schema.
-
-Normal fix for a bad applied migration:
+### Change workflow
 
 ```text
-Create a new migration that corrects the problem.
+main pull → reset personal Neon branch from production → git branch → write migration
+→ test on personal → PR → merge → flyway migrate -environment=production from main
 ```
 
-Use `repair` only when the migration history table itself is the problem.
-
-## Creating a migration
-
-Use `flyway add` to create a new migration file:
-
-```bash
-flyway add -description=add_content_items
-```
-
-Then open the generated file in `migrations/`, write the SQL, and save it.
-
-Migration files follow this format:
-
-```text
-V<version>__<description>.sql
-```
-
-This repo uses an ordinal-plus-timestamp version so files sort deterministically and read clearly:
-
-```text
-V004_20260629194749__directus_relations_privacy_audit_files.sql
-```
-
-`flyway add` generates a bare-timestamp version; keep the repo's ordinal prefix convention when you
-name the file (the next migration would be `V006_<timestamp>__...`).
-
-Rules:
-
-* Use one migration per logical schema change.
-* Do not edit a migration after it has been applied to a shared database.
-* If something needs to change, create a new migration.
-* Do not create undo migrations. Flyway Community does not support them.
-
-You may edit a migration while testing locally on your personal Neon branch, as long as that
-migration has not been applied to a shared database. If you need a clean retest, reset your
-personal Neon branch from the production parent and run the migration again.
-
-## Verifying a migration
-
-After running on your personal branch:
-
-```bash
-flyway migrate
-```
-
-or explicitly:
-
-```bash
-flyway migrate -environment=personal
-```
-
-open the database in your preferred PostgreSQL client and confirm:
-
-* the expected tables and columns exist
-* `flyway_schema_history` has a successful row for the migration
-* new schema objects are owned by `gm_migrator`
-
-You can check table ownership with:
-
-```sql
-SELECT tablename, tableowner
-FROM pg_tables
-WHERE schemaname = 'public';
-```
-
-You can use any PostgreSQL client, such as DataGrip, DBeaver, TablePlus, pgAdmin, or `psql`.
-
-Database clients are fine for browsing, querying, and drafting SQL. Do not apply structural schema changes directly through a client unless the same change is captured in a Flyway migration file.
-
-## Team workflow
-
-Use this workflow for schema changes.
-
-### 1. Start from the latest `main`
-
-```bash
-git switch main
-git pull
-```
-
-### 2. Refresh your personal Neon branch
-
-In Neon, reset your personal branch from the `production` parent.
-
-This gives you a clean copy of the current production database before testing a new migration.
-
-### 3. Create a Git branch
-
-```bash
-git switch -c feature/add-content-items
-```
-
-### 4. Create a migration
-
-```bash
-flyway add -description=add_content_items
-```
-
-Then write the SQL in the generated file under `migrations/`.
-
-### 5. Test on your personal Neon branch
-
-```bash
-flyway info -environment=personal
-flyway validate -environment=personal
-flyway migrate -environment=personal
-flyway info -environment=personal
-```
-
-Confirm the migration shows as successful and verify the schema in your PostgreSQL client if needed.
-
-### 6. Commit and push
-
-```bash
-git add migrations/
-git commit -m "Add content items"
-git push -u origin feature/add-content-items
-```
-
-### 7. Open a pull request
-
-Open a GitHub pull request and get one review.
-
-Do not apply the migration to production before the pull request is merged.
-
-(Or if confident you can just merge yourself)
-
-### 8. Merge to `main`
-
-After review, merge the pull request into `main`.
-
-### 9. Apply merged migrations to production
-
-From `main`:
-
-```bash
-git switch main
-git pull
-flyway info -environment=production
-flyway validate -environment=production
-flyway migrate -environment=production
-flyway info -environment=production
-```
-
-Only migrations merged to `main` should be applied to production.
-
-## Important rules
-
-### Keep secrets out of Git
-
-Never commit:
-
-```text
-flyway.user.toml
-flyway.user.toml.superuser
-.env
-*.env
-```
-
-Real database passwords should be shared through a password manager or another secure channel, never through Git.
-
-### Never edit applied migrations on shared databases
-
-Flyway stores a checksum for each applied migration. If an applied migration file changes, Flyway will detect it and stop.
-
-Fix mistakes on production or any shared database with a new migration.
-
-### Personal branches are for testing
-
-Personal Neon branches are disposable testing copies.
-
-It is fine to reset them from the production parent. It is also fine to test a migration there,
-find a problem, reset the branch, edit the migration, and test again.
-
-Do not treat a personal branch as the source of truth.
-
-### Production is migrated only from `main`
-
-Never apply an unmerged migration to production.
-
-The safe sequence is:
-
-```text
-personal branch -> PR -> merge to main -> production
-```
-Applying an unmerged migration to production can block later migrations with validation errors.
-
-### Fix forward
-
-Flyway Community does not support undo migrations. If a migration needs to be corrected after it has been applied to a shared database, write a new migration that reverses or amends the previous one.
-
-### Keep role setup out of migrations
-
-Do not create login roles, passwords, or administrative grants in Flyway migration files.
-
-Role setup belongs in `provisioning/` as a manual admin script.
-
-### Keep structure SQL-first
-
-Engineers change database structure through Flyway migrations:
-
-* tables
-* columns
-* constraints
-* indexes
-* foreign keys
-* database functions/triggers
-
-When Directus is added later, it can manage content and editor/admin configuration, but structural schema changes should still go through Flyway.
-
-Directus is now bootstrapped (see the setup notes above), so this boundary is live, not
-hypothetical: Directus owns its own system tables and, later, content and editor/admin
-configuration, but it must never be used to alter the application schema. Every table, column,
-constraint, index, foreign key, function, and trigger in the application schema stays Flyway-owned
-and SQL-first. If a change shows up in Directus's data-model tools that isn't captured in a
-migration, that is drift to correct, not a shortcut to take.
-
-## Notes on Flyway configuration
-
-The shared `flyway.toml` config points Flyway at the `migrations/` folder and makes `personal`
-the default environment. Production is available as `[environments.production]`, but it is not the
-default.
-
-It also sets:
-
-```toml
-initSql = "SET ROLE gm_migrator"
-```
-
-for both the production environment and the personal environment.
-
-This makes Flyway run migrations as the shared `gm_migrator` role after connecting with a limited
-login role.
-
-`initSql` is currently used for simplicity. If Flyway removes it in a future version, this can move to an `afterConnect.sql` callback in a scanned location.
-
-## Production
-
-Production is configured as an explicit Flyway environment.
-
-Production uses:
-
-* the Neon root branch named `production`
-* separate production credentials
-* an explicit `[environments.production]` block in `flyway.toml`
-* explicit production deploy commands from `main`
-
-Do not give normal developers production credentials by default. Do not restore dev snapshots onto
-production once it contains client content; promote schema with Flyway migrations.
+Migration filenames use an ordinal-plus-timestamp so they sort deterministically and read clearly:
+`V004_20260629194749__directus_relations_privacy_audit_files.sql`. `flyway add` generates a bare
+timestamp — rename it to keep the ordinal prefix.
+
+---
+
+## Rules
+
+* **Secrets stay out of Git.** `flyway.user.toml`, `.env`, `.env.test`, `tag-sync/.env`. Share real
+  passwords through a password manager.
+* **Never edit an applied migration on a shared database.** Flyway checksums them. Fix forward with a
+  new migration — Flyway Community has no undo.
+* **`flyway repair` is not part of the workflow.** It rewrites history metadata, not the schema. Use
+  it only when the history table itself is the problem.
+* **Structure is SQL-first.** Tables, columns, constraints, indexes, foreign keys, functions, and
+  triggers all go through Flyway. Directus owns its system tables plus content and editor
+  configuration — it must never alter the application schema. Anything that appears in Directus's
+  data-model tools without a matching migration is drift to correct.
+* **Roles and grants are manual provisioning**, never migrations.
+* **Never restore a dev snapshot onto production** once it holds client content. Promote schema with
+  Flyway migrations so content survives.
+
+---
+
+## Known gaps at handoff
+
+Tracked issues a new maintainer should expect. None are silent — each fails loudly or is documented
+at the point of use.
+
+| # | Issue | Impact |
+|---|---|---|
+| 1 | **Production CORS is misconfigured.** `CORS_ORIGIN` on Render is pinned to the Framer plugin CDN origin only, so the public forms' POST is browser-blocked. Verified 2026-07-26. | Public submission forms do not work in a browser until Render env is updated. Deploy-time fix, no code change. |
+| 2 | **Production migration level is unrecorded.** `gm-intake` writes `updates_consent*` and `preferred_follow_up`, added in **V008**. | If production is below V008, every submission fails with a generic 500. Confirm with `flyway info -environment=production` before trusting the endpoint. |
+| 3 | **V007 does not exist and never will.** `main` runs V001–V006, V008, V009 — the file-upload work merged as V009. | Treat V007 as permanently void. `outOfOrder` is not enabled, so a migration numbered V007 added later would be **refused** on every branch already at V008+. Never reuse the number. |
+| 4 | **No CI.** Nothing runs `flyway validate` or the API suite automatically. | Drift is caught only by review. |
+| 5 | **`framer/README.md` per-form consent table is stale.** Both forms now send `consent_to_contact` from the single required agreement checkbox, and the backend requires it for both sources (Phase 3). | Documentation only; the shipped code and tests agree with each other. |
+
+**File uploads / attachment scanning** are merged into `main` but **not enabled**: V009 is not applied
+to production, and every `GM_PUBLIC_FILE_UPLOADS_ENABLED` / `GM_SCAN_*_ENABLED` flag defaults to
+`false`. Turning the feature on requires S3 storage (`STORAGE_LOCATIONS=s3` plus the `STORAGE_S3_*`
+block), the GuardDuty SQS queue, and the three folder ids — see the commented blocks in
+`.env.example`. Do not enable it piecemeal.
+
+Still deferred, documented in [`gathering-matters-db/docs/framer-integration.md`](gathering-matters-db/docs/framer-integration.md):
+image sync to Framer, and Framer sync↔publish boundary automation.
