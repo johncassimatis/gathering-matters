@@ -225,3 +225,51 @@ test asserts the real event name is registered.
   here (covered by the committed MinIO integration test + unit logic).
 - Unit suites: 72/72 pure-logic tests pass (`node --test`), including the new
   `files.update` regression guard.
+
+## PR #9 merged and verified in production (2026-08-04)
+
+- **PR #9** (`fix/publish-gate-files-event`) reviewed and squash-merged to `main` as
+  `eb77a00`. Files changed: `gm-publish-gate/src/index.js`, its `test/hook.test.mjs`, and
+  this handoff doc. Original branch fix commit: `05e8827`.
+- **Incorrect -> corrected event name:** `directus_files.items.update` -> `files.update`.
+  Directus derives a hook's scope from the collection; for the `directus_files` SYSTEM
+  collection it strips the `directus_` prefix and omits the `.items` infix
+  (`ItemsService`: `eventScope = isSystemCollection(collection) ? collection.substring(9) : "items"`),
+  so file updates emit `files.update`. The old registration never fired.
+- **Why the original unit test missed it:** the test fetched the handler by the same wrong
+  name (`registered(state).get('directus_files.items.update')`), so it exercised the handler
+  in isolation and stayed green regardless of the real Directus event dispatch. A new
+  regression test now asserts `files.update` IS registered and `directus_files.items.update`
+  is NOT, plus that the user-collection hooks keep `<collection>.items.<action>`.
+- **Disposable before/after** (PG18 + Directus 12.0.2, gating ON): before the fix,
+  `STAFF_MANAGED->Public` and `THREATS_FOUND->Public` returned `200` (dead guard); after,
+  both return `422` and the file stays out of Public, while the fully eligible clean-public
+  file is allowed to `200`. 16-fixture anonymous download matrix and unit suite (72/72) green.
+- **Production deploy:** the fix went live via Render `dep-d9p643jbc2fs73a3nkkg` (commit
+  `eb77a00`, trigger `new_commit`, live 22:08Z). It was then superseded by
+  `dep-d9p71o49v7es73d6jhq0` (commit `ade03e2` — the unrelated PR #4 handoff-gaps merge,
+  live 23:19Z), which **preserved** the fix. **Current production runtime commit: `ade03e2`**;
+  `files.update` present, `directus_files.items.update` absent. Six extensions load; no gate errors.
+- **Production rejected-mutation proof (one intentional attempt):** authenticated
+  `PATCH /files/464be434-6516-4835-8527-76bb85307eaf` -> Public Downloads returned **`422`**
+  (`PUBLIC_FILE_GATE_FAILED`, reason "manual public folder placement is not allowed"). The
+  file was unchanged: still in `Clean Staff Review`, `modified_on` untouched, scan
+  `NO_THREATS_FOUND`/`STAFF_MANAGED`, no content association created, anonymous
+  `/assets/<id>` `403`, `/gm-library/downloads/<id>` `404`.
+- **Public download boundary remains fail-closed**, and the manual-folder-override guard is
+  now live and enforcing.
+- **No production side effects:** `directus_files=1`, `file_scan=1`, `submission_file=0`;
+  main queue and DLQ `0/0/0`; DLQ alarm `OK`; S3 holds only the retained clean object and
+  the GuardDuty validation object; flags unchanged
+  (`GM_SCAN_GATING_ENABLED=true`, `GM_SCAN_CONSUMER_ENABLED=true`,
+  `GM_PUBLIC_FILE_UPLOADS_ENABLED=false`, `GM_STAFF_FILE_UPLOADS_ENABLED=false`,
+  `GM_TEST_MODE=false`).
+
+### Remaining certification gaps (scan gating is NOT yet fully certified)
+- No disposable Directus collection registration / bootstrap schema snapshot, so the
+  collection-level `content_item{,_file}.items.*` hooks are not exercised end to end.
+- Review / promotion / publication editorial flows not yet exercised end to end in a
+  disposable environment.
+- The S3 version/ETag mismatch fail-closed branch not yet exercised end to end.
+- The production threat-positive (`THREATS_FOUND`) GuardDuty test still pending explicit
+  approval of the exact harmless test artifact and procedure.
