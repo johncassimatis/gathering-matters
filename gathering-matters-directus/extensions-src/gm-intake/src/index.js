@@ -29,7 +29,9 @@ const SubmissionError = createError('SUBMISSION_FAILED', 'Submission could not b
 const MAX_TITLE = 160, MAX_BODY = 5000, MAX_NAME = 120, MAX_EMAIL = 254, MAX_PHONE = 32, MAX_UA = 512;
 const WINDOW_MINUTES = 60, MAX_PER_WINDOW = 5, DUP_WINDOW_HOURS = 24;
 const SOURCES = new Set(['listening_program', 'young_adult_initiative']);
-const AGE_RANGES = new Set(['under_18','18_24','25_34','35_44','45_54','55_64','65_plus','prefer_not_to_say']);
+// 'all' = the idea suits all age groups (Listening Program: this field is the idea's
+// intended audience, not the submitter's own age). Ranges are non-overlapping.
+const AGE_RANGES = new Set(['under_18','18_24','25_34','35_44','45_54','55_64','65_plus','all','prefer_not_to_say']);
 const EMAIL_REQUIRED_SOURCES = new Set(['listening_program', 'young_adult_initiative']);
 const CONTACT_CONSENT_REQUIRED_SOURCES = new Set(['listening_program', 'young_adult_initiative']);
 const FOLLOW_UP_METHODS = new Set(['email', 'phone', 'video']);
