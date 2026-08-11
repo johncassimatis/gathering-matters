@@ -44,21 +44,25 @@ TAG-ONLY changes (tags on content already in Framer):
   the source-of-truth set.
 - **Tags:** ensures `Topics`/`Audiences`/`Regions` exist (each with a `Name` field) + the
   `topics`/`audiences`/`regions` multi-ref fields on `Directus`; upserts active tags (updates `Name`
-  on rename); sets each content item's tag fields to its exact active tags (matched by content_item
-  **UUID** = Framer slug, never title); prunes tags no longer active.
-- **Removal:** deletes Framer `Directus` items whose UUID is not in the eligible set; deletes
-  `Content Types` items that are inactive in Directus **and** unreferenced by any remaining content.
+  on rename); sets each content item's tag fields to its exact active tags (matched by the content_item
+  **UUID carried in the Framer `Directus Id` field**, not the human slug or title); prunes tags no
+  longer active.
+- **Removal:** deletes Framer `Directus` items whose content_item UUID is not in the eligible set;
+  deletes `Content Types` items that are inactive in Directus **and** unreferenced by any remaining content.
 - Never writes plugin-owned content fields; never touches `FAQ` or `How it works`. Re-running with no
   changes is a **no-op**.
 
 ### Safeguards (this deletes production Framer records, so it's defensive)
 - **Fail-closed reads:** any non-2xx / malformed Directus response **aborts** before any write — a read
   failure can never be mistaken for an "empty source set" that would delete everything.
-- **UUID-only matching:** only records positively identified as Directus-managed (by UUID) are deletable;
-  manual/arbitrary Framer records are never touched.
+- **UUID-only matching:** only records positively identified as Directus-managed (they carry a content_item
+  UUID in the `Directus Id` field, or as a UUID-shaped slug) are deletable; manual/arbitrary Framer records
+  are never touched.
 - **Referenced-type guard:** a content type is never deleted while any remaining Framer content references it.
-- **Mass-deletion guard:** if total deletions exceed `MAX_DELETES` (default 10), the run **aborts** unless
-  you pass `--force` (for an intentional large cleanup). Dry-run always prints the full plan first.
+- **Mass-deletion guard (two backstops):** the run **aborts** (unless `--force`) if total deletions exceed
+  `MAX_DELETES` (default 10), **or** if content deletions would remove more than `MAX_DELETE_FRACTION`
+  (default 0.5) of the Directus-managed items — the fraction backstop catches an id-scheme mismatch that
+  flags most/all items even when the absolute count is under the cap. Dry-run always prints the full plan first.
 - **Idempotent:** a second run with no Directus changes is a clean no-op.
 
 ## Prerequisites

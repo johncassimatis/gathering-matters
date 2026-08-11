@@ -73,6 +73,22 @@ if (!content) { console.error(`Framer content collection '${CONTENT}' not found.
 const contentItems = await content.getItems();
 const contentFields = await content.getFields();
 const ctField = contentFields.find((f) => f.name === "Content Type Id");
+
+// Resolve each Framer item's Directus content_item UUID. The official plugin stores it in the
+// "Directus Id" field (formattedText, e.g. "<p dir=\"auto\">0199...</p>"); an older mapping used the
+// UUID directly as the Framer slug. Try the field first, then a UUID-shaped slug. An item with
+// NEITHER is not Directus-managed (manual/unrelated Framer record) and must never be deleted.
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const directusIdField = contentFields.find((f) => f.name === "Directus Id");
+if (!directusIdField) log(`WARNING: '${CONTENT}' has no "Directus Id" field — falling back to UUID-shaped slugs only.`);
+const directusIdOf = (item) => {
+  const raw = directusIdField ? item.fieldData[directusIdField.id]?.value : null;
+  const m = raw && String(raw).match(UUID_RE);
+  if (m) return m[0].toLowerCase();
+  if (item.slug && UUID_RE.test(item.slug)) return item.slug.toLowerCase();
+  return null;
+};
+
 const typesCol = cols.find((c) => c.name === TYPES);
 const typeItems = typesCol ? await typesCol.getItems() : [];
 log(`Framer '${CONTENT}': ${contentItems.length} items | '${TYPES}': ${typeItems.length} items`);
@@ -80,12 +96,18 @@ log(`Framer '${CONTENT}': ${contentItems.length} items | '${TYPES}': ${typeItems
 // ============ PLAN (no writes) ============
 const plan = { tagOps: [], contentDeletes: [], typeDeletes: [] };
 
-// content: delete Framer items whose UUID (slug) is not eligible in Directus
-const contentDeletes = contentItems.filter((i) => !eligibleIds.has(i.slug));
+// content: delete only Framer items positively identified as Directus-managed (they carry a
+// content_item UUID) whose UUID is no longer eligible in Directus. Items with no Directus UUID
+// (manual/unrelated Framer records) are never touched.
+const contentDeletes = contentItems.filter((i) => {
+  const uid = directusIdOf(i);
+  return uid !== null && !eligibleIds.has(uid);
+});
 plan.contentDeletes = contentDeletes;
 
 // remaining content after deletion -> which content types stay referenced
-const remaining = contentItems.filter((i) => eligibleIds.has(i.slug));
+const deleteSet = new Set(contentDeletes);
+const remaining = contentItems.filter((i) => !deleteSet.has(i));
 const referencedTypeKeys = new Set(remaining.map((i) => ctField && i.fieldData[ctField.id]?.value).filter(Boolean));
 // stale types: not active in Directus AND not referenced by any remaining content
 const typeDeletes = typeItems.filter((i) => !activeTypeKeys.has(i.slug) && !referencedTypeKeys.has(i.slug));
@@ -119,13 +141,21 @@ log("=====================================");
 // ---- MASS-DELETION GUARD ----
 const tagRemovalCount = tagWork.reduce((n, w) => n + w.removals.length, 0);
 const destructive = contentDeletes.length + typeDeletes.length + tagRemovalCount;
+// Fraction guard: refuse to delete a large share of Directus-managed content even when under the
+// absolute cap. This is the backstop that would have caught the id-scheme mismatch (delete all 9).
+const managedCount = contentItems.filter((i) => directusIdOf(i) !== null).length;
+const deleteFraction = managedCount ? contentDeletes.length / managedCount : 0;
+const MAX_DELETE_FRACTION = Number(process.env.MAX_DELETE_FRACTION || 0.5);
+const fractionTripped = contentDeletes.length >= 3 && deleteFraction > MAX_DELETE_FRACTION;
 log(`destructive deletions planned: ${destructive} (content ${contentDeletes.length} + types ${typeDeletes.length} + tag-prunes ${tagRemovalCount}); guard limit ${MAX_DELETES}`);
-if (destructive > MAX_DELETES && !FORCE) {
-  console.error(`\nABORT: planned deletions (${destructive}) exceed MAX_DELETES (${MAX_DELETES}).`);
+if (fractionTripped) log(`content deletions = ${contentDeletes.length}/${managedCount} Directus-managed items (${(deleteFraction * 100).toFixed(0)}%), over MAX_DELETE_FRACTION ${MAX_DELETE_FRACTION}`);
+const guardTripped = destructive > MAX_DELETES || fractionTripped;
+if (guardTripped && !FORCE) {
+  console.error(`\nABORT: mass-deletion guard tripped (deletions=${destructive} vs cap ${MAX_DELETES}; content fraction=${(deleteFraction * 100).toFixed(0)}% vs cap ${(MAX_DELETE_FRACTION * 100).toFixed(0)}%).`);
   console.error("Re-run with --force to authorize this large reconciliation intentionally.");
   process.exit(3);
 }
-if (destructive > MAX_DELETES && FORCE) log(`(mass-deletion guard overridden by --force)`);
+if (guardTripped && FORCE) log(`(mass-deletion guard overridden by --force)`);
 
 if (DRY_RUN) { log("\nDRY-RUN: no Framer writes performed."); process.exit(0); }
 
@@ -151,7 +181,7 @@ for (const w of tagWork) {
   const slugToId = new Map(nowItems.map((i) => [i.slug, i.id]));
   const liveContent = await content.getItems(); // after content deletion
   for (const item of liveContent) {
-    const ids = itemTagIds.get(item.slug) || new Set();
+    const ids = itemTagIds.get(directusIdOf(item)) || new Set();
     const want = desired.filter((t) => ids.has(t.id));
     const cur = (item.fieldData[fld.id]?.value) || [];
     if (!sameSet(cur, want.map((t) => t.slug))) {
