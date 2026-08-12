@@ -1,9 +1,9 @@
 -- provisioning/07_directus_studio_field_config.sql
 --
 -- Directus DATA-MODEL PRESENTATION config — NOT roles/grants, NOT application schema.
--- Adds a "Tags" many-to-many picker to the content_item edit page (over the existing
--- content_item_tag junction from V002) plus friendly name/title dropdowns for the
--- id-reference fields.
+-- Adds a "Tags" many-to-many picker to the content_item AND submission edit pages (over the
+-- existing content_item_tag / submission_tag junctions from V002, sharing the one tag set)
+-- plus friendly name/title dropdowns for the id-reference fields.
 --
 -- RUN AS the OWNER of the directus_* system tables: gm_directus (or neondb_owner).
 -- gm_migrator owns the application tables but NOT directus_fields/directus_relations,
@@ -68,7 +68,48 @@ UPDATE directus_collections SET display_template = '{{content_item_id.title}} - 
        icon = 'sell'
  WHERE collection = 'content_item_tag';
 
--- ROLLBACK (to fully remove the Tags picker):
---   DELETE FROM directus_relations WHERE many_collection = 'content_item_tag';
---   DELETE FROM directus_fields    WHERE collection = 'content_item' AND field = 'tags';
+-- 4) submission <-> tag  M2M, surfaced as a "Tags" chip-picker on submission (parallels ------
+--    content_item, over the existing submission_tag junction from V002). Same shared tag set.
+--    gm_directus already has INSERT/DELETE on submission_tag (provisioning/05), so writes work.
+INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, note, width)
+SELECT 'submission', 'tags', 'm2m', 'list-m2m',
+       '{"enableCreate":false,"enableSelect":true,"template":"{{tag_id.name}}"}',
+       'related-values', '{"template":"{{tag_id.name}}"}',
+       'Topic/Audience/Region tags (M2M over submission_tag).', 'full'
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_fields WHERE collection = 'submission' AND field = 'tags'
+);
+
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, junction_field, one_deselect_action)
+SELECT 'submission_tag', 'submission_id', 'submission', 'tags', 'tag_id', 'delete'
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_relations WHERE many_collection = 'submission_tag' AND many_field = 'submission_id'
+);
+INSERT INTO directus_relations (many_collection, many_field, one_collection, junction_field, one_deselect_action)
+SELECT 'submission_tag', 'tag_id', 'tag', 'submission_id', 'nullify'
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_relations WHERE many_collection = 'submission_tag' AND many_field = 'tag_id'
+);
+
+UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
+       display_options = '{"template":"{{name}}"}'
+ WHERE collection = 'submission_tag' AND field = 'tag_id';
+UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
+       display_options = '{"template":"{{title}}"}'
+ WHERE collection = 'submission_tag' AND field = 'submission_id';
+UPDATE directus_collections SET display_template = '{{title}}' WHERE collection = 'submission';
+UPDATE directus_collections SET display_template = '{{submission_id.title}} - {{tag_id.name}}',
+       icon = 'sell'
+ WHERE collection = 'submission_tag';
+
+-- NOTE: Moderator write access to submission tags was added 2026-08-11 — create + delete on
+-- submission_tag were granted to the 'submission-review' policy (create validated to active tags
+-- only), mirroring how 'content-edit-any' covers content_item_tag; read stays via 'submission-read'.
+-- Those are Directus permissions (directus_permissions rows) managed in Directus like the rest of
+-- the policy model, so they are NOT seeded by this file.
+
+-- ROLLBACK (to fully remove both Tags pickers):
+--   DELETE FROM directus_relations WHERE many_collection IN ('content_item_tag','submission_tag');
+--   DELETE FROM directus_fields
+--     WHERE (collection='content_item' AND field='tags') OR (collection='submission' AND field='tags');
 --   then clear the Directus schema cache.
