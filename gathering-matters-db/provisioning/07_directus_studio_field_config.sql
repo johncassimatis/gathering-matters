@@ -97,6 +97,10 @@ UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related
 UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
        display_options = '{"template":"{{title}}"}'
  WHERE collection = 'submission_tag' AND field = 'submission_id';
+-- which content type a submission is promoted to -> name dropdown (M2O to content_type)
+UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
+       display_options = '{"template":"{{name}}"}'
+ WHERE collection = 'submission' AND field = 'promotion_content_type_id';
 UPDATE directus_collections SET display_template = '{{title}}' WHERE collection = 'submission';
 UPDATE directus_collections SET display_template = '{{submission_id.title}} - {{tag_id.name}}',
        icon = 'sell'
