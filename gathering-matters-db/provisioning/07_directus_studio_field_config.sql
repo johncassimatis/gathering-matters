@@ -48,8 +48,21 @@ WHERE NOT EXISTS (
     SELECT 1 FROM directus_relations WHERE many_collection = 'content_item_tag' AND many_field = 'tag_id'
 );
 
--- 2) Friendly dropdowns for id-reference fields (these could also be set in the Studio; ------
---    UPDATE is a no-op if the field-meta row does not exist yet on a fresh instance).
+-- NOTE (Directus permissions — managed in Directus, NOT seeded here): the new 'tags' alias field is
+-- only visible/editable to a role whose content_item read AND update field-lists include it. Added
+-- 2026-08-11: 'tags' appended to content-read-editorial (read) and content-edit-any (update) so
+-- Editors and Publishers see/use it. Junction read + create/delete on content_item_tag, and tag read,
+-- were already granted by content-read-editorial / content-edit-any. (Admins always saw it.)
+
+-- 2) Friendly M2O dropdowns for id-reference fields. IMPORTANT: a select-dropdown-m2o field is
+--    only EDITABLE in the Studio when its relation is registered in directus_relations — an FK
+--    constraint alone is NOT enough (the picker cannot load options, so the field is read-only).
+--    So seed the standalone M2O relation rows too. (The content_item_tag / submission_tag junction
+--    fields get their relation rows from sections 1 and 4.)
+INSERT INTO directus_relations (many_collection, many_field, one_collection)
+SELECT 'content_item','content_type_id','content_type'
+WHERE NOT EXISTS (SELECT 1 FROM directus_relations WHERE many_collection='content_item' AND many_field='content_type_id');
+
 UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
        display_options = '{"template":"{{name}}"}'
  WHERE collection = 'content_item'     AND field = 'content_type_id';
@@ -97,7 +110,11 @@ UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related
 UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
        display_options = '{"template":"{{title}}"}'
  WHERE collection = 'submission_tag' AND field = 'submission_id';
--- which content type a submission is promoted to -> name dropdown (M2O to content_type)
+-- which content type a submission is promoted to -> name dropdown (M2O to content_type).
+-- Seed the relation row (see section 2 note) so the dropdown is editable, not just the interface.
+INSERT INTO directus_relations (many_collection, many_field, one_collection)
+SELECT 'submission','promotion_content_type_id','content_type'
+WHERE NOT EXISTS (SELECT 1 FROM directus_relations WHERE many_collection='submission' AND many_field='promotion_content_type_id');
 UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
        display_options = '{"template":"{{name}}"}'
  WHERE collection = 'submission' AND field = 'promotion_content_type_id';
@@ -106,11 +123,48 @@ UPDATE directus_collections SET display_template = '{{submission_id.title}} - {{
        icon = 'sell'
  WHERE collection = 'submission_tag';
 
--- NOTE: Moderator write access to submission tags was added 2026-08-11 — create + delete on
--- submission_tag were granted to the 'submission-review' policy (create validated to active tags
--- only), mirroring how 'content-edit-any' covers content_item_tag; read stays via 'submission-read'.
--- Those are Directus permissions (directus_permissions rows) managed in Directus like the rest of
--- the policy model, so they are NOT seeded by this file.
+-- 5) Privacy-review sign-off on content_item. Publishing is gated by a DB constraint ----------
+--    (content_item_publish_requires_privacy_review, from V004): status='published' requires
+--    privacy_reviewed_at IS NOT NULL (and _at/_by must be set together). A Publisher records the
+--    review with the one-click Flow button "Mark as Privacy Reviewed" (see NOTE below), which
+--    stamps privacy_reviewed_at=now and privacy_reviewed_by=the current user. The two fields are
+--    shown READ-ONLY on the form so the button is the only setter.
+UPDATE directus_fields SET interface = 'datetime', display = 'datetime', readonly = true
+ WHERE collection = 'content_item' AND field = 'privacy_reviewed_at';
+INSERT INTO directus_relations (many_collection, many_field, one_collection)
+SELECT 'content_item','privacy_reviewed_by','directus_users'
+WHERE NOT EXISTS (SELECT 1 FROM directus_relations WHERE many_collection='content_item' AND many_field='privacy_reviewed_by');
+UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related-values',
+       display_options = '{"template":"{{first_name}} {{last_name}}"}', readonly = true
+ WHERE collection = 'content_item' AND field = 'privacy_reviewed_by';
+
+-- NOTE (Directus permissions + a Flow — managed in Directus, NOT seeded by this file). For the
+-- privacy-review sign-off, added 2026-08-11:
+--   * publisher-content-update: READ on content_item fields privacy_reviewed_at, privacy_reviewed_by
+--     (so Publishers can SEE the review fields; Editors deliberately still cannot).
+--   * publisher-content-update: READ on directus_users filtered to id = $CURRENT_USER
+--     (id, first_name, last_name) so the reviewer's name renders for the Publisher.
+--   * a manual Flow "Mark as Privacy Reviewed" (trigger=manual, collections=[content_item],
+--     location=both, accountability=all, requireConfirmation): op1 (exec) returns
+--     { at: new Date().toISOString() }; op2 (item-update) sets privacy_reviewed_at={{stamp.at}},
+--     privacy_reviewed_by={{$accountability.user}} on key {{$trigger.body.keys[0]}}. Recreate it when
+--     rebuilding (flows live in directus_flows/operations). `location:both` makes the button appear on
+--     the item page (not just the list). A Publisher runs it; an Editor cannot write those fields.
+--   * publisher-content-update also grants READ on that directus_flows row (filter id = the flow) and
+--     on directus_operations (filter flow = the flow) — a non-admin must be able to READ a manual flow
+--     to SEE its button, exactly as flow-read-promotion does for the Moderator's Promote button.
+
+-- NOTE (Directus permissions — managed in Directus, NOT seeded by this file). For the Moderator to
+-- actually USE the submission pickers, these were added 2026-08-11:
+--   * submission-review: create + delete on submission_tag (create validated to active tags only),
+--     mirroring how 'content-edit-any' covers content_item_tag.
+--   * submission-read:   read on content_type (id,name,slug,is_active) — so the promote-to-type
+--     dropdown can load its options and show the current value.
+--   * added 'tags' to the submission READ field-list (submission-read) and the submission UPDATE
+--     field-list (submission-review).
+-- Lessons for any relational field given to a non-admin role: (a) the alias/relation field must be
+-- in the parent collection's read AND update field-lists for that role, and (b) the role must have
+-- READ on the RELATED collection, or the picker renders empty / read-only for that user.
 
 -- ROLLBACK (to fully remove both Tags pickers):
 --   DELETE FROM directus_relations WHERE many_collection IN ('content_item_tag','submission_tag');
