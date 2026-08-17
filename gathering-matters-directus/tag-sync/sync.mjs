@@ -1,6 +1,7 @@
 // gm-framer reconciliation: Directus -> Framer.
 // Owns (custom side, runs alongside the official Directus plugin):
 //   - Topics / Audiences / Regions collections + their multi-reference assignments
+//   - a derived "Tag Labels" plain-text field per item (comma-joined tag names, for card chips)
 //   - REMOVAL of Framer content whose Directus UUID is no longer Framer-eligible
 //   - REMOVAL of stale Framer Content Types that are inactive in Directus AND unreferenced
 // Never touches plugin-owned content fields (title/body/summary/author/content-type/etc.),
@@ -30,6 +31,20 @@ const DIMS = [
   { dim: "audience", coll: "Audiences", field: "audiences" },
   { dim: "region", coll: "Regions", field: "regions" },
 ];
+// Derived plain-text field with the item's active tag names, comma-joined (e.g. "Belonging, Global,
+// Adults"). Framer can't pass a multi-reference into a code component, so we denormalize it here for
+// rendering tag chips on cards. The relational multi-ref fields above stay for filtering.
+const LABELS_FIELD = process.env.LABELS_FIELD || "Tag Labels";
+// Featured image: we set the Framer "Image" field to the item's Directus asset URL; Framer fetches
+// and re-hosts it (framer.uploadImage is browser-only, so it can't be used from Node). "Image Source"
+// stores the Directus file id so re-ingestion only happens when the image actually changes. The
+// tokened asset URL is sent to Framer only during ingestion and is NOT stored (Framer keeps its own).
+// SCAN GATE (fail-closed): an image is ingested only if its Directus file has a NO_THREATS_FOUND
+// scan record in file_scan and no conflicting threat record. An image with no scan row (e.g. never
+// run through the malware pipeline) or any non-clean status is treated as no-image and CLEARED from
+// Framer, so the public site never displays an unscanned/unsafe upload.
+const IMAGE_FIELD = process.env.IMAGE_FIELD || "Image";
+const IMAGE_SRC_FIELD = "Image Source";
 
 if (!DIRECTUS_URL || !DIRECTUS_TOKEN || !FRAMER_PROJECT || !FRAMER_API_KEY) {
   console.error("Missing config (DIRECTUS_URL, DIRECTUS_TOKEN, FRAMER_PROJECT, FRAMER_API_KEY)."); process.exit(2);
@@ -50,9 +65,27 @@ async function dx(path) {
 // so what it returns IS the source-of-truth set.
 const tags = await dx("/items/tag?fields=id,name,slug,dimension&limit=-1");
 const junction = await dx("/items/content_item_tag?fields=content_item_id,tag_id&limit=-1");
-const eligible = await dx("/items/content_item?fields=id&limit=-1");
+const eligible = await dx("/items/content_item?fields=id,featured_image_id&limit=-1");
 const activeTypes = await dx("/items/content_type?fields=id,slug&limit=-1");
+const scans = await dx("/items/file_scan?fields=directus_file_id,scan_status&limit=-1");
 const eligibleIds = new Set(eligible.map((x) => x.id));
+const imageByUuid = new Map(eligible.map((x) => [x.id, x.featured_image_id || ""]));
+const assetUrl = (fid) => `${DIRECTUS_URL}/assets/${fid}?access_token=${DIRECTUS_TOKEN}`;
+// Scan gate: a file is display-eligible only with a NO_THREATS_FOUND scan and no threat record.
+// Files with no scan row are absent from both sets and therefore NOT clean (fail-closed).
+const cleanFileIds = new Set();
+const unsafeFileIds = new Set();
+for (const s of scans) {
+  if (!s.directus_file_id) continue;
+  if (s.scan_status === "NO_THREATS_FOUND") cleanFileIds.add(s.directus_file_id);
+  else unsafeFileIds.add(s.directus_file_id);
+}
+for (const id of unsafeFileIds) cleanFileIds.delete(id); // any threat record vetoes a clean one
+// Resolve an item's featured image to a file id ONLY if that file is scan-clean, else "" (cleared).
+const cleanImageFor = (uid) => {
+  const fid = imageByUuid.get(uid) || "";
+  return fid && cleanFileIds.has(fid) ? fid : "";
+};
 const activeTypeKeys = new Set([...activeTypes.map((t) => t.id), ...activeTypes.map((t) => t.slug)]);
 const tagsByDim = { topic: [], audience: [], region: [] };
 for (const t of tags) (tagsByDim[t.dimension] ||= []).push(t);
@@ -63,7 +96,18 @@ for (const j of junction) {
   if (!itemTagIds.has(j.content_item_id)) itemTagIds.set(j.content_item_id, new Set());
   itemTagIds.get(j.content_item_id).add(j.tag_id);
 }
-log(`Directus (read-only): eligible content=${eligibleIds.size}, active types=${activeTypeKeys.size / 2}, active tags=${tags.length}, junction rows=${junction.length}`);
+log(`Directus (read-only): eligible content=${eligibleIds.size}, active types=${activeTypeKeys.size / 2}, active tags=${tags.length}, junction rows=${junction.length}, scan-clean files=${cleanFileIds.size} (of ${scans.length} scan rows)`);
+
+// derived Tag Labels: comma-joined active tag names for an item, ordered topic > audience > region.
+const tagById = new Map(tags.map((t) => [t.id, t]));
+const DIM_ORDER = { topic: 0, audience: 1, region: 2 };
+const labelFor = (uid) => {
+  const ids = itemTagIds.get(uid);
+  if (!ids || !ids.size) return "";
+  return [...ids].map((id) => tagById.get(id)).filter(Boolean)
+    .sort((a, b) => (DIM_ORDER[a.dimension] - DIM_ORDER[b.dimension]) || a.name.localeCompare(b.name))
+    .map((t) => t.name).join(", ");
+};
 
 // ---- Framer ----
 const framer = await connect(FRAMER_PROJECT, FRAMER_API_KEY);
@@ -73,6 +117,9 @@ if (!content) { console.error(`Framer content collection '${CONTENT}' not found.
 const contentItems = await content.getItems();
 const contentFields = await content.getFields();
 const ctField = contentFields.find((f) => f.name === "Content Type Id");
+let labelsField = contentFields.find((f) => f.name === LABELS_FIELD);
+let imageField = contentFields.find((f) => f.name === IMAGE_FIELD);
+let imageSrcField = contentFields.find((f) => f.name === IMAGE_SRC_FIELD);
 
 // Resolve each Framer item's Directus content_item UUID. The official plugin stores it in the
 // "Directus Id" field (formattedText, e.g. "<p dir=\"auto\">0199...</p>"); an older mapping used the
@@ -113,6 +160,26 @@ const referencedTypeKeys = new Set(remaining.map((i) => ctField && i.fieldData[c
 const typeDeletes = typeItems.filter((i) => !activeTypeKeys.has(i.slug) && !referencedTypeKeys.has(i.slug));
 plan.typeDeletes = typeDeletes;
 
+// derived Tag Labels: how many remaining items would have their label text change
+const labelChanges = remaining.filter((i) => {
+  const want = labelFor(directusIdOf(i));
+  const cur = labelsField ? (i.fieldData[labelsField.id]?.value ?? "") : "";
+  return want !== cur;
+});
+
+// featured images: how many remaining items would have their image (re)ingested or cleared. Uses the
+// scan gate, so a non-clean image resolves to "" (cleared if it was previously set).
+const imageChanges = remaining.filter((i) => {
+  const want = cleanImageFor(directusIdOf(i));
+  const cur = imageSrcField ? (i.fieldData[imageSrcField.id]?.value ?? "") : "";
+  return want !== cur;
+});
+// images blocked by the scan gate: item has a featured image in Directus but it is not scan-clean.
+const imagesGated = remaining.filter((i) => {
+  const fid = imageByUuid.get(directusIdOf(i)) || "";
+  return fid && !cleanFileIds.has(fid);
+});
+
 // tag collections plan (upserts + prunes) — computed to also count destructive tag prunes for the guard
 const tagWork = [];
 for (const { dim, coll, field } of DIMS) {
@@ -136,6 +203,10 @@ log(`content types to DELETE from '${TYPES}': ${typeDeletes.length}`);
 typeDeletes.forEach((i) => log(`   - ${i.slug}`));
 log(`tag collection ops: ${plan.tagOps.length}`);
 plan.tagOps.slice(0, 30).forEach((o) => log(`   - ${o}`));
+log(`'${LABELS_FIELD}' text updates: ${labelChanges.length}`);
+log(`'${IMAGE_FIELD}' (featured) updates: ${imageChanges.length}`);
+log(`'${IMAGE_FIELD}' BLOCKED by scan-gate (unscanned/unsafe, will be cleared): ${imagesGated.length}`);
+imagesGated.slice(0, 20).forEach((i) => log(`   - ${i.slug} (file ${imageByUuid.get(directusIdOf(i))})`));
 log("=====================================");
 
 // ---- MASS-DELETION GUARD ----
@@ -189,6 +260,42 @@ for (const w of tagWork) {
     }
   }
   if (removals.length) await dc.removeItems(removals.map((i) => i.id));
+}
+
+// 2.5) write the derived "Tag Labels" text field (comma-joined tag names) for the card chips
+if (!labelsField) labelsField = (await content.addFields([{ type: "string", name: LABELS_FIELD }]))[0];
+{
+  const liveForLabels = await content.getItems();
+  let labelWrites = 0;
+  for (const item of liveForLabels) {
+    const want = labelFor(directusIdOf(item));
+    const cur = item.fieldData[labelsField.id]?.value ?? "";
+    if (want !== cur) {
+      await content.addItems([{ id: item.id, fieldData: { [labelsField.id]: { type: "string", value: want } } }]);
+      labelWrites++;
+    }
+  }
+  log(`'${LABELS_FIELD}': updated ${labelWrites} item(s)`);
+}
+
+// 2.6) featured images: set the Framer Image field to the Directus asset URL; Framer ingests + hosts it
+if (!imageField) imageField = (await content.addFields([{ type: "image", name: IMAGE_FIELD }]))[0];
+if (!imageSrcField) imageSrcField = (await content.addFields([{ type: "string", name: IMAGE_SRC_FIELD }]))[0];
+{
+  const liveForImages = await content.getItems();
+  let imgWrites = 0;
+  for (const item of liveForImages) {
+    const wantFid = cleanImageFor(directusIdOf(item)); // "" if not scan-clean -> clears the image
+    const curFid = item.fieldData[imageSrcField.id]?.value ?? "";
+    if (wantFid === curFid) continue;
+    const fd = {
+      [imageField.id]: { type: "image", value: wantFid ? assetUrl(wantFid) : null },
+      [imageSrcField.id]: { type: "string", value: wantFid },
+    };
+    try { await content.addItems([{ id: item.id, fieldData: fd }]); imgWrites++; }
+    catch (e) { log(`   image set failed for ${item.slug}: ${e?.message}`); }
+  }
+  log(`'${IMAGE_FIELD}': updated ${imgWrites} item(s)`);
 }
 
 // 3) delete stale, now-unreferenced content types

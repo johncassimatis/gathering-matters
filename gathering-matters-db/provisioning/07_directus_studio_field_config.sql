@@ -50,9 +50,15 @@ WHERE NOT EXISTS (
 
 -- NOTE (Directus permissions — managed in Directus, NOT seeded here): the new 'tags' alias field is
 -- only visible/editable to a role whose content_item read AND update field-lists include it. Added
--- 2026-08-11: 'tags' appended to content-read-editorial (read) and content-edit-any (update) so
--- Editors and Publishers see/use it. Junction read + create/delete on content_item_tag, and tag read,
--- were already granted by content-read-editorial / content-edit-any. (Admins always saw it.)
+-- 'tags' to content-read-editorial (read) and content-edit-any (update) so Editors and Publishers
+-- see/use it. Junction read + create/delete on content_item_tag, and tag read, were already granted
+-- by content-read-editorial / content-edit-any. (Admins always saw it.)
+-- GOTCHA fixed: the content_item_tag CREATE permission's validation referenced content_item_id
+-- ({content_item_id.status IN (draft,archived)}). On an inline M2M add Directus fills content_item_id
+-- implicitly, so that clause made non-admin saves fail with "content_item_id: Value is required".
+-- Reduced the create validation to {tag_id.is_active = true}; the draft/archived gate still holds via
+-- the content-edit-any PARENT update filter. NEVER validate a junction's create against its own
+-- parent-FK field — it breaks inline M2M writes for non-admins.
 
 -- 2) Friendly M2O dropdowns for id-reference fields. IMPORTANT: a select-dropdown-m2o field is
 --    only EDITABLE in the Studio when its relation is registered in directus_relations — an FK
@@ -123,6 +129,45 @@ UPDATE directus_collections SET display_template = '{{submission_id.title}} - {{
        icon = 'sell'
  WHERE collection = 'submission_tag';
 
+-- 4b) Featured image on content_item -> usable image picker (M2O to directus_files). --------------
+INSERT INTO directus_relations (many_collection, many_field, one_collection)
+SELECT 'content_item','featured_image_id','directus_files'
+WHERE NOT EXISTS (SELECT 1 FROM directus_relations WHERE many_collection='content_item' AND many_field='featured_image_id');
+UPDATE directus_fields SET interface = 'file-image', display = 'image'
+ WHERE collection = 'content_item' AND field = 'featured_image_id';
+
+-- NOTE (Directus permissions — managed in Directus, NOT seeded here) for featured images, added
+-- 2026-08-16: featured_image_id appended to content-read-editorial (read) + content-edit-any (update)
+-- so Editors/Publishers can attach it. UPLOADING new files needs directus_files CREATE — granted
+-- 2026-08-16 to the gm-scan-managed file policies for Contributor, Editor, and Publisher (fields '*').
+-- GuardDuty still scans every S3 object regardless of Directus folder. The Framer Sync policy got:
+-- featured_image_id added to its
+-- content_item read, plus READ on directus_files (filtered to type LIKE 'image/%') so the sync can
+-- fetch /assets. tag-sync then sets the Framer "Image" field to the item's tokened asset URL and
+-- Framer ingests + re-hosts it (framer.uploadImage is browser-only; a URL-set is the Node path).
+-- The tokened URL is transient (used only during ingestion, never stored by Framer).
+--
+-- FIX 2026-08-17 (managed in Directus, NOT seeded here). Two problems surfaced when a Publisher
+-- opened a PUBLISHED item that has a featured image:
+--   (a) FORBIDDEN on field "modified_on" in directus_files. The gm-scan-managed READ permission for
+--       each editorial policy (Contributor/Moderator/Editor/Publisher) still carried a narrow
+--       8-field list (id, filename_download, title, type, filesize, width, height, duration) even
+--       though CREATE was already '*'. The file/image interface reads more than that (modified_on,
+--       storage, filename_disk, focal_point_*, ...). Fix: set those four READ permissions'
+--       fields to '*'. The scan gate is the row-level `permissions` filter
+--       (folder _in [Clean Staff Review, Public Downloads]) and is left untouched — widening the
+--       field list does not widen which files are visible.
+--   (b) FORBIDDEN "access this" on the file itself. Featured images uploaded via the item form had
+--       no folder (root/null), which the folder filter's _in never matches, so GET /files/:id 403'd.
+--       Fix: set the featured_image_id interface option folder = 'Clean Staff Review' so new uploads
+--       land in an editorial-readable, folder-gated location, and moved the two existing root images
+--       into Clean Staff Review. (Framer Sync was unaffected throughout: its file READ is gated by
+--       type LIKE 'image/%', not folder, so the sync could always read root images.)
+-- CAVEAT: those two pre-existing featured images (one image/svg+xml) had NO file_scan row — featured
+-- images uploaded through the Studio form are not landing in "Pending Malware Scan" and so are not
+-- being scan-gated the way user submissions are. Revisit if featured images must be scanned before
+-- staff can preview them (route the field's upload folder through Pending + a move-on-clean step).
+
 -- 5) Privacy-review sign-off on content_item. Publishing is gated by a DB constraint ----------
 --    (content_item_publish_requires_privacy_review, from V004): status='published' requires
 --    privacy_reviewed_at IS NOT NULL (and _at/_by must be set together). A Publisher records the
@@ -153,6 +198,25 @@ UPDATE directus_fields SET interface = 'select-dropdown-m2o', display = 'related
 --   * publisher-content-update also grants READ on that directus_flows row (filter id = the flow) and
 --     on directus_operations (filter flow = the flow) — a non-admin must be able to READ a manual flow
 --     to SEE its button, exactly as flow-read-promotion does for the Moderator's Promote button.
+--
+-- FIX 2026-08-17 (managed in Directus, NOT seeded here). Opening ANY item that HAS revision history
+-- (i.e. anything previously saved by another user — every published/archived item, and edited drafts)
+-- threw FORBIDDEN "You don't have permission to access this." The item detail page fetches that item's
+-- revision history on load, but the Publisher had NO read on directus_revisions at all, so the
+-- /revisions request 403'd. Fix: publisher-content-update now grants READ on directus_revisions
+-- (fields '*') FILTERED to collection = 'content_item'. The filter is load-bearing: a filterless
+-- revisions read would expose revision `data`/`delta` snapshots of `submission` rows, which carry
+-- submitter PII. Scoped this way, querying submission revisions returns 200-empty (not the data),
+-- while content_item revisions load normally. (Content Versioning is not used, so no directus_versions
+-- grant is needed.)
+--
+-- Then 2026-08-17: broadened publisher-content-update's directus_users READ from filter
+-- id=$CURRENT_USER to no filter (all users), keeping the field list names-only (id, first_name,
+-- last_name — email/token/password stay hidden, and requesting them still 403s). This makes actor
+-- names in the revision list, and privacy_reviewed_by when another user did the review, render
+-- instead of showing blank. The "Mark as Privacy Reviewed" Flow still reads the current user fine
+-- (self is included in "all"). Note the earlier NOTE above that describes this same permission as
+-- "filtered to id = $CURRENT_USER" is now superseded by this wider grant.
 
 -- NOTE (Directus permissions — managed in Directus, NOT seeded by this file). For the Moderator to
 -- actually USE the submission pickers, these were added 2026-08-11:
