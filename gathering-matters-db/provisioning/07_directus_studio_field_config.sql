@@ -59,6 +59,30 @@ WHERE NOT EXISTS (
 -- Reduced the create validation to {tag_id.is_active = true}; the draft/archived gate still holds via
 -- the content-edit-any PARENT update filter. NEVER validate a junction's create against its own
 -- parent-FK field — it breaks inline M2M writes for non-admins.
+--
+-- FIX 2026-08-17 (managed in Directus, NOT seeded here): Publishers could not CREATE content items,
+-- and neither Editors nor Publishers could set tags AT create time. content_item CREATE existed only
+-- on 'content-create-own' (Contributor + Editor) whose field-list omits 'tags'; Publishers had no
+-- create at all. Added a content_item CREATE permission to 'content-edit-any' (shared by Editor +
+-- Publisher ONLY, never Contributor) with fields
+-- [title,slug,summary,body,content_type_id,external_url,author,editorial_notes,tags,featured_image_id].
+-- Directus UNIONs permissions across a role's policies, so Editors now create with the union of
+-- content-create-own + this (tags included) and Publishers gain create outright. 'status' is
+-- deliberately NOT in the create list (new items default to draft; publishing stays a separate
+-- publisher-content-update step behind the privacy-review gate). content_item_tag create/delete were
+-- already on content-edit-any, so one-step create-with-tags and add-tags-after-create both work.
+-- Verified live as the Publisher: bare create, add-tag-after-create, and create-with-tag all succeed.
+-- Same day, same cause for the Featured checkbox and the Publish Date: 'featured' and 'published_at'
+-- are Publisher-only fields (they live on publisher-content-update's UPDATE list; Editors cannot set
+-- them), so they must NOT go in the shared content-edit-any create list. Added a SECOND content_item
+-- CREATE permission on the Publisher-only 'publisher-content-update' policy with fields
+-- ['featured','published_at']; the union gives Publishers those two at create while keeping them off
+-- Editors. 'status' and the privacy fields stay update-only, so publishing is still a separate gated
+-- step. Setting published_at on a draft is safe (the Framer sync only ingests status=published AND
+-- published_at <= now, and the privacy-review DB CHECK only fires when status=published).
+-- Verified: Publisher create with featured=true and a future published_at returns both set, status draft.
+-- (Aside: content_item has no hard DELETE for gm_directus — the DB role lacks DELETE on that
+-- gm_migrator-owned table — which is why removal is modeled as status=archived, not deletion.)
 
 -- 2) Friendly M2O dropdowns for id-reference fields. IMPORTANT: a select-dropdown-m2o field is
 --    only EDITABLE in the Studio when its relation is registered in directus_relations — an FK

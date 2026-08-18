@@ -125,16 +125,19 @@ DIRECTORY: gathering-matters-directus
 
 ```bash
 cp .env.example .env               # PowerShell: Copy-Item
-cp .env.test.example .env.test     # required even if you never run tests — see note below
 docker compose run --rm directus bootstrap
-docker compose up -d directus
+docker compose up -d
 docker compose logs -f directus
 ```
 
-> The compose file defines a `test-runner` service with `env_file: .env.test`. Docker Compose
-> validates every service's env file, so **a bare `docker compose up -d` fails if `.env.test` is
-> missing** — even though you only wanted Directus. Create it, or target the service explicitly
-> (`docker compose up -d directus`).
+The `test-runner` service is behind the `test` Compose profile, so the default
+`docker compose up -d` does not require `.env.test`. Create `.env.test` only
+when running the API test suite:
+
+```bash
+cp .env.test.example .env.test
+docker compose run --rm test-runner
+```
 
 Filling in `.env` — the decisions that matter beyond the listed values:
 
@@ -170,9 +173,15 @@ the baked artifacts are what run.
 | `gm-publish-gate` | hook | moves files between folders as publication changes |
 | `gm-review` | endpoint | authenticated reviewer metadata |
 
-The last three ship **feature-flagged off** (`GM_SCAN_CONSUMER_ENABLED`, `GM_SCAN_GATING_ENABLED`,
-`GM_PUBLIC_FILE_UPLOADS_ENABLED` all default `false`). They load either way — the flags gate
-behaviour, not loading. Rebuild with:
+The scan and upload behavior ships disabled by default:
+
+* `GM_PUBLIC_FILE_UPLOADS_ENABLED` gates public file uploads.
+* `GM_SCAN_CONSUMER_ENABLED` gates GuardDuty scan-result processing.
+* `GM_SCAN_GATING_ENABLED` gates publication/download file gating.
+
+These flags control behavior; the extensions still load. `gm-review` is loaded
+regardless and uses `GM_REVIEW_ROLE_IDS` and `GM_REVIEW_DOWNLOAD_ROLE_IDS` for
+authorization. Rebuild with:
 
 ```bash
 docker compose build directus && docker compose up -d --force-recreate directus
@@ -268,17 +277,26 @@ at the point of use.
 
 | # | Issue | Impact |
 |---|---|---|
-| 1 | **Production CORS is misconfigured.** `CORS_ORIGIN` on Render is pinned to the Framer plugin CDN origin only, so the public forms' POST is browser-blocked. Verified 2026-07-26. | Public submission forms do not work in a browser until Render env is updated. Deploy-time fix, no code change. |
-| 2 | **Production migration level is unrecorded.** `gm-intake` writes `updates_consent*` and `preferred_follow_up`, added in **V008**. | If production is below V008, every submission fails with a generic 500. Confirm with `flyway info -environment=production` before trusting the endpoint. |
-| 3 | **V007 does not exist and never will.** `main` runs V001–V006, V008, V009 — the file-upload work merged as V009. | Treat V007 as permanently void. `outOfOrder` is not enabled, so a migration numbered V007 added later would be **refused** on every branch already at V008+. Never reuse the number. |
-| 4 | **No CI.** Nothing runs `flyway validate` or the API suite automatically. | Drift is caught only by review. |
-| 5 | **`framer/README.md` per-form consent table is stale.** Both forms now send `consent_to_contact` from the single required agreement checkbox, and the backend requires it for both sources (Phase 3). | Documentation only; the shipped code and tests agree with each other. |
+| 1 | **Public form may not be placed on a live page.** The earlier CORS block is **fixed** — `CORS_ORIGIN` on Render now allowlists the Framer site origin and a live preflight echoes it (verified 2026-08-11). But a site redesign may have left no form on a routed public page. | Confirm a form is actually placed on a public page before trusting end-to-end submission. Browser CORS no longer blocks the POST. |
+| 2 | **V007 does not exist and never will.** `main` runs V001–V006, V008, V009 — the file-upload work merged as V009. | Treat V007 as permanently void. `outOfOrder` is not enabled, so a migration numbered V007 added later would be **refused** on every branch already at V008+. Never reuse the number. |
+| 3 | **No CI.** Nothing runs `flyway validate` or the API suite automatically. | Drift is caught only by review. |
+| 4 | **`framer/README.md` per-form consent table is stale.** Both forms now send `consent_to_contact` from the single required agreement checkbox, and the backend requires it for both sources (Phase 3). | Documentation only; the shipped code and tests agree with each other. |
 
-**File uploads / attachment scanning** are merged into `main` but **not enabled**: V009 is not applied
-to production, and every `GM_PUBLIC_FILE_UPLOADS_ENABLED` / `GM_SCAN_*_ENABLED` flag defaults to
-`false`. Turning the feature on requires S3 storage (`STORAGE_LOCATIONS=s3` plus the `STORAGE_S3_*`
-block), the GuardDuty SQS queue, and the three folder ids — see the commented blocks in
-`.env.example`. Do not enable it piecemeal.
+**Recently resolved (were gaps, now verified on prod 2026-08-11):** the CORS misconfiguration (see #1)
+and the unrecorded migration level — production is now at **V009** (`file_scan`, `submission_file`,
+`content_item_file` collections exist), so `gm-intake`'s V008 fields are present.
 
-Still deferred, documented in [`gathering-matters-db/docs/framer-integration.md`](gathering-matters-db/docs/framer-integration.md):
-image sync to Framer, and Framer sync↔publish boundary automation.
+**File uploads / attachment scanning are LIVE in production** (verified 2026-08-11): V009 applied,
+`STORAGE_LOCATIONS=s3`, and `GM_PUBLIC_FILE_UPLOADS_ENABLED` / `GM_SCAN_CONSUMER_ENABLED` /
+`GM_SCAN_GATING_ENABLED` are all `true` (`GM_STAFF_FILE_UPLOADS_ENABLED` is deliberately `false`).
+The happy-path scan loop is **proven**: a GuardDuty scan resolved `NO_THREATS_FOUND` on 2026-08-04 and
+the consumer gated it. Still unproven on prod: the **public-form end-to-end** upload (pending a form on
+a live page) and the **threat-positive / quarantine** path. Note the flags still default `false` in
+`.env.example`, so a fresh local/staging instance ships with the feature off until you set the S3,
+GuardDuty SQS, and folder-id blocks — do not enable it piecemeal.
+
+Featured-image sync to Framer is **implemented** (2026-08-17): the `tag-sync` reconciler
+sets each item's Framer `Image` field from the Directus asset and Framer re-hosts it, gated so
+only malware-scanned (`NO_THREATS_FOUND`) files are pushed. Still deferred, documented in
+[`gathering-matters-db/docs/framer-integration.md`](gathering-matters-db/docs/framer-integration.md):
+Framer sync↔publish boundary automation.
