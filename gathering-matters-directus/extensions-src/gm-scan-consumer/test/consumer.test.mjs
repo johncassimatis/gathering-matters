@@ -11,10 +11,29 @@ const event = (status = 'NO_THREATS_FOUND', overrides = {}) => ({
   id: overrides.id || 'event-1',
   time: overrides.time || '2026-07-31T12:00:00Z',
   detail: {
-    s3ObjectDetails: { bucketName: CFG.bucket, objectKey: 'uploads/a.pdf', versionId: 'v1', eTag: 'etag-1' },
+    s3ObjectDetails: { bucketName: CFG.bucket, objectKey: overrides.objectKey || 'uploads/a.pdf', versionId: 'v1', eTag: 'etag-1' },
     scanResultDetails: { scanResultStatus: status },
   },
 });
+
+// Minimal thenable builder for insert().onConflict(col).ignore().returning(col).
+class InsertBuilder {
+  constructor(db, table, values) { this.db = db; this.table = table; this.values = values; this.conflictCol = null; this.doIgnore = false; this.returnCols = null; }
+  onConflict(col) { this.conflictCol = col; return this; }
+  ignore() { this.doIgnore = true; return this; }
+  returning(cols) { this.returnCols = cols; return this; }
+  then(resolve, reject) { return this._run().then(resolve, reject); }
+  async _run() {
+    const rows = this.db.rows[this.table] || (this.db.rows[this.table] = []);
+    if (this.conflictCol && this.doIgnore && rows.some((r) => r[this.conflictCol] === this.values[this.conflictCol])) {
+      return []; // unique conflict, ignored
+    }
+    const row = { id: `gen-${rows.length + 1}`, ...this.values };
+    rows.push(row);
+    (this.db.inserts ||= []).push({ table: this.table, values: this.values });
+    return this.returnCols ? [{ id: row.id }] : [row];
+  }
+}
 
 class Query {
   constructor(db, table) { this.db = db; this.table = table; this.filters = []; }
@@ -30,6 +49,7 @@ class Query {
     const rows = this.db.rows[this.table] || [];
     return Promise.resolve(rows.find((row) => this.filters.every(([key, value]) => row[key] === value)) || undefined);
   }
+  insert(values) { return new InsertBuilder(this.db, this.table, values); }
   update(values) {
     const rows = this.db.rows[this.table] || [];
     const matches = rows.filter((row) => this.filters.every(([key, value]) => row[key] === value));
@@ -118,4 +138,61 @@ test('a STAFF_MANAGED pending scan is matched by object_key, released to Clean S
   const replay = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
   assert.equal(replay.disposition, 'ignore-duplicate');
   assert.equal(db.state.rows.directus_files[0].folder, 'REVIEW');
+});
+
+const FILE_UUID = '3e3507f2-d981-466f-aa14-64ab7ea3eabd';
+
+test('image-transform derivative keys are ignored (deleted), never retried into the DLQ', async () => {
+  // GuardDuty scans `<id>__<hash>.avif` thumbnails; they are not tracked files.
+  const db = fakeDatabase(null, { id: FILE_UUID, folder: 'REVIEW' });
+  const msg = { Body: JSON.stringify(event('NO_THREATS_FOUND', { objectKey: `${FILE_UUID}__7809681e43a1.avif` })), Attributes: { ApproximateReceiveCount: '3' } };
+  const r = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.deepEqual(r, { ack: true, disposition: 'ignore-derivative' });
+  assert.equal(db.state.rows.file_scan.length, 0); // nothing recorded for a transform
+});
+
+test('a Studio-native orphan is reconciled after the grace window and released to Clean Staff Review', async () => {
+  // A featured image uploaded via the Studio has a directus_files row but no
+  // flow-created file_scan row; after the grace window the consumer records
+  // GuardDuty's verdict itself.
+  const db = fakeDatabase(null, { id: FILE_UUID, folder: 'ROOT' });
+  const msg = { Body: JSON.stringify(event('NO_THREATS_FOUND', { objectKey: `${FILE_UUID}.jpg` })), Attributes: { ApproximateReceiveCount: '2', SentTimestamp: String(Date.now()) } };
+  const r = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.equal(r.ack, true);
+  assert.equal(r.disposition, 'reconciled-orphan');
+  assert.equal(r.releasedToStaffReview, true);
+  assert.equal(db.state.rows.file_scan.length, 1);
+  const row = db.state.rows.file_scan[0];
+  assert.equal(row.directus_file_id, FILE_UUID);
+  assert.equal(row.origin, 'STAFF_MANAGED');
+  assert.equal(row.scan_status, 'NO_THREATS_FOUND');
+  assert.equal(db.state.rows.directus_files[0].folder, 'REVIEW');
+});
+
+test('within the grace window a Studio-native orphan is retried, not prematurely recorded', async () => {
+  const db = fakeDatabase(null, { id: FILE_UUID, folder: 'ROOT' });
+  const msg = { Body: JSON.stringify(event('NO_THREATS_FOUND', { objectKey: `${FILE_UUID}.jpg` })), Attributes: { ApproximateReceiveCount: '1' } };
+  const r = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.deepEqual(r, { ack: false, disposition: 'retry-unmatched' });
+  assert.equal(db.state.rows.file_scan.length, 0);
+});
+
+test('a threat-positive orphan is recorded but quarantined to Pending, never released', async () => {
+  const db = fakeDatabase(null, { id: FILE_UUID, folder: 'ROOT' });
+  const msg = { Body: JSON.stringify(event('THREATS_FOUND', { objectKey: `${FILE_UUID}.jpg` })), Attributes: { ApproximateReceiveCount: '2' } };
+  const r = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.equal(r.ack, true);
+  assert.equal(r.disposition, 'reconciled-orphan');
+  assert.equal(r.releasedToStaffReview, false);
+  assert.equal(db.state.rows.file_scan[0].scan_status, 'THREATS_FOUND');
+  assert.equal(db.state.rows.file_scan[0].reason, 'THREATS_FOUND');
+  assert.equal(db.state.rows.directus_files[0].folder, 'PENDING');
+});
+
+test('an original key with no matching directus_files row is retried, not recorded', async () => {
+  const db = fakeDatabase(null, { id: 'unrelated-id', folder: 'ROOT' });
+  const msg = { Body: JSON.stringify(event('NO_THREATS_FOUND', { objectKey: `${FILE_UUID}.jpg` })), Attributes: { ApproximateReceiveCount: '5' } };
+  const r = await processScanMessage({ msg, database: db, cfg: CFG, pendingFolder: 'PENDING', cleanFolder: 'REVIEW', logger });
+  assert.deepEqual(r, { ack: false, disposition: 'retry-unmatched' });
+  assert.equal(db.state.rows.file_scan.length, 0);
 });

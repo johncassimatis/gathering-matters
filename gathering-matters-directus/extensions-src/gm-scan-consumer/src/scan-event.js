@@ -30,6 +30,28 @@ export function normalizeEtag(value) {
   return value == null ? null : String(value).replace(/^"|"$/g, '');
 }
 
+// Directus stores on-the-fly image transforms (thumbnails, avif/webp) as
+// `<file-id>__<hash>.<ext>`. GuardDuty scans those S3 objects too, but they are
+// NOT directus_files rows and must never be tracked in file_scan. Original
+// uploads are `<file-id>.<ext>` and file ids are UUIDs (no underscores), so a
+// '__' in the object's basename conclusively marks a derivative.
+export function isDerivativeKey(objectKey) {
+  if (typeof objectKey !== 'string') return false;
+  const base = objectKey.split('/').pop() || '';
+  return base.includes('__');
+}
+
+const FILE_ID_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\./i;
+// The directus_files primary key encoded in an original object key `<uuid>.<ext>`.
+// Returns null for anything that is not a bare `<uuid>.<ext>` original (including
+// derivatives and legacy prefixed test keys like `uploads/a.pdf`).
+export function fileIdFromObjectKey(objectKey) {
+  if (typeof objectKey !== 'string') return null;
+  const base = objectKey.split('/').pop() || '';
+  const m = base.match(FILE_ID_RE);
+  return m ? m[1].toLowerCase() : null;
+}
+
 function validEventTime(value) {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) return null;
   return new Date(value).toISOString();

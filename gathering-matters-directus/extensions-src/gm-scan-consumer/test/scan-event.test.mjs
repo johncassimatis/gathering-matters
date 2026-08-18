@@ -1,7 +1,7 @@
 // Pure unit tests for the scan-event logic. No AWS/Directus. Run: node --test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateScanEvent, decideAction, normalizeObjectKey } from '../src/scan-event.js';
+import { evaluateScanEvent, decideAction, normalizeObjectKey, isDerivativeKey, fileIdFromObjectKey } from '../src/scan-event.js';
 
 const CFG = { account: '025452941754', region: 'us-west-2', bucket: 'gathering-matters-directus-media-025452941754-us-west-2' };
 const ev = (status, over = {}) => ({
@@ -82,4 +82,22 @@ test('version and ETag mismatches cannot update the current file row', () => {
   const r = evaluateScanEvent(ev('NO_THREATS_FOUND'), CFG);
   assert.equal(decideAction({ object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v-old', etag: 'e1' }, r).action, 'ignore-object-mismatch');
   assert.equal(decideAction({ object_key: 'abc.pdf', bucket: CFG.bucket, object_version_id: 'v1', etag: 'different' }, r).action, 'ignore-object-mismatch');
+});
+
+const UUID = '3e3507f2-d981-466f-aa14-64ab7ea3eabd';
+
+test('isDerivativeKey flags `<id>__<hash>.<ext>` transforms and nothing else', () => {
+  assert.equal(isDerivativeKey(`${UUID}__7809681e43a17c0d.avif`), true);
+  assert.equal(isDerivativeKey(`prefix/${UUID}__abc.webp`), true);
+  assert.equal(isDerivativeKey(`${UUID}.jpg`), false);      // original upload
+  assert.equal(isDerivativeKey('uploads/a.pdf'), false);    // legacy/test key
+  assert.equal(isDerivativeKey(null), false);
+});
+
+test('fileIdFromObjectKey extracts the file id only from a bare `<uuid>.<ext>` original', () => {
+  assert.equal(fileIdFromObjectKey(`${UUID}.jpg`), UUID);
+  assert.equal(fileIdFromObjectKey(`${UUID.toUpperCase()}.PNG`), UUID); // lowercased
+  assert.equal(fileIdFromObjectKey(`${UUID}__hash.avif`), null);        // derivative
+  assert.equal(fileIdFromObjectKey('uploads/a.pdf'), null);            // not a uuid key
+  assert.equal(fileIdFromObjectKey(null), null);
 });
