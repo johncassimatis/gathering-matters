@@ -5,12 +5,12 @@ Directus 12 runtime with six custom extensions, and the public Framer submission
 
 | Directory | What it owns | Its own README |
 |---|---|---|
-| `gathering-matters-db/` | PostgreSQL schema. Flyway migrations are the **only** way structure changes. | — |
-| `gathering-matters-directus/` | Directus 12 runtime: Docker image, extensions, API tests. | — |
+| `gathering-matters-db/` | PostgreSQL schema. Flyway migrations are the **only** way structure changes. | [Database setup](#database-setup-gathering-matters-db) (this README) |
+| `gathering-matters-directus/` | Directus 12 runtime: Docker image, extensions, API tests. | [Directus runtime](#directus-runtime-gathering-matters-directus) (this README) |
 | `gathering-matters-directus/tag-sync/` | Directus → Framer tag sync + removal reconciliation. | [`tag-sync/README.md`](gathering-matters-directus/tag-sync/README.md) |
 | `framer/` | Source of truth for the two public submission form components. | [`framer/README.md`](framer/README.md) |
-| `scripts/` | Repo-root wrappers (`npm run sync:framer-tags*`). | — |
-| `gathering-matters-db/docs/` | Framer integration architecture + Phase 0 spike results. | — |
+| `scripts/` | Repo-root wrappers (`npm run sync:framer-tags*`). | [`tag-sync/README.md`](gathering-matters-directus/tag-sync/README.md) |
+| `gathering-matters-db/docs/` | Design & architecture docs (Framer integration, S3 scan-gating, submission attachments, reconciliation). | [`docs/README.md`](gathering-matters-db/docs/README.md) |
 | `infra/aws/` | AWS storage-security stack (private S3 media bucket + GuardDuty malware scanning) and the Render/Directus deploy handoff. | [`infra/aws/README.md`](infra/aws/README.md) |
 
 **Current stack:** Neon PostgreSQL 18 (`neondb`, `uuidv7()` PKs) · Flyway Community 12.8.2-rc2175 ·
