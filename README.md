@@ -302,20 +302,20 @@ at the point of use.
 
 | # | Issue | Impact |
 |---|---|---|
-| 1 | **No public form confirmed on a live page.** A site redesign may have left the submission form off the routed public pages. | Confirm a form is actually placed on a public page before trusting end-to-end submission. |
-| 2 | **V007 does not exist and never will.** `main` runs V001–V006, V008, V009 — the file-upload work merged as V009. | Treat V007 as permanently void. `outOfOrder` is not enabled, so a migration numbered V007 added later would be **refused** on every branch already at V008+. Never reuse the number. |
-| 3 | **No CI.** Nothing runs `flyway validate` or the API suite automatically. | Drift is caught only by review. |
+| 1 | **V007 does not exist and never will.** `main` runs V001–V006, V008, V009 — the file-upload work merged as V009. | Treat V007 as permanently void. `outOfOrder` is not enabled, so a migration numbered V007 added later would be **refused** on every branch already at V008+. Never reuse the number. |
+| 2 | **No CI.** Nothing runs `flyway validate` or the API suite automatically. | Drift is caught only by review. |
 
-**Recently resolved (were gaps, now verified on prod 2026-08-11):** the CORS misconfiguration
-and the unrecorded migration level — production is now at **V009** (`file_scan`, `submission_file`,
-`content_item_file` collections exist), so `gm-intake`'s V008 fields are present.
+**Recently resolved (were gaps):** the CORS misconfiguration and the unrecorded migration level
+(verified on prod 2026-08-11), and a **public submission form now confirmed on a live routed page**.
+Production is now at **V009** (`file_scan`, `submission_file`, `content_item_file` collections
+exist), so `gm-intake`'s V008 fields are present.
 
 **File uploads / attachment scanning are LIVE in production** (verified 2026-08-11): V009 applied,
 `STORAGE_LOCATIONS=s3`, and `GM_PUBLIC_FILE_UPLOADS_ENABLED` / `GM_SCAN_CONSUMER_ENABLED` /
 `GM_SCAN_GATING_ENABLED` are all `true` (`GM_STAFF_FILE_UPLOADS_ENABLED` is deliberately `false`).
 The happy-path scan loop is **proven**: a GuardDuty scan resolved `NO_THREATS_FOUND` on 2026-08-04 and
-the consumer gated it. Still unproven on prod: the **public-form end-to-end** upload (pending a form on
-a live page) and the **threat-positive / quarantine** path. Note the flags still default `false` in
+the consumer gated it. Still unproven on prod: the **public-form end-to-end** upload (the form is now on a live page, so it
+is unblocked — just not yet exercised end-to-end) and the **threat-positive / quarantine** path. Note the flags still default `false` in
 `.env.example`, so a fresh local/staging instance ships with the feature off until you set the S3,
 GuardDuty SQS, and folder-id blocks — do not enable it piecemeal.
 
