@@ -1,8 +1,10 @@
 # Directus → Framer CMS Integration — Architecture (Variant A)
 
-**Status:** Phases 0, 2, 3, 4 complete. The read-only Framer Sync token is live on production (`cms.gatheringmatters.com`), the Framer CMS collection is mapped to the 10-field allowlist, and a first real sync pulled **16 published items** cleanly (only allowlist fields; no private data). **Remaining: Phase 5** (sync↔publish boundary), **Phase 6** (staff runbook), and the deferred items (tags, images, removal-on-unpublish).
+**Status:** Phases 0, 2, 3, 4 complete. The read-only Framer Sync token is live on production (`cms.gatheringmatters.com`) and the Framer CMS collection is mapped to the published-content allowlist. **Update (2026-08):** the allowlist is now **11 fields** (it adds `featured_image_id`), and the items listed below as deferred — **tags, featured images, and removal-on-unpublish — are all implemented** via `tag-sync/`. Remaining: **Phase 5** (sync↔publish boundary automation) and **Phase 6** (staff runbook).
 
 ## Production deploy requirement: CORS
+**Resolved (2026-08):** `CORS_ORIGIN` on Render now allowlists the published site origin alongside the plugin and preview origins (comma-separated, never `*`), and a live preflight echoes it. The single-origin example below is kept as context for how the requirement works.
+
 The Framer plugin runs in a browser iframe, so the production Directus deploy (Render) **must** allow the plugin's origin. Required env vars (set on Render, then redeploy):
 ```
 CORS_ENABLED=true
@@ -14,10 +16,10 @@ The plugin origin is `https://<pluginId>.plugins.framercdn.com` (stable per plug
 The intended design was a published-only `content_public` **view** that also flattened tags. Phase 0 proved Directus 12 **cannot expose a plain PostgreSQL view as a collection** (a view has no primary key, which Directus requires). The integration instead uses a **scoped, read-only Directus role on the existing `content_item` collection** — no schema change; the security boundary is enforced by Directus, which the plugin cannot bypass.
 
 ## Public field contract (exact v1 allowlist)
-The Framer Sync policy grants **read** on `content_item` limited to **exactly** these 10 fields:
+The Framer Sync policy grants **read** on `content_item` limited to **exactly** these 11 fields:
 
 ```
-id  slug  title  summary  body  author  external_url  featured  published_at  content_type_id
+id  slug  title  summary  body  author  external_url  featured  published_at  content_type_id  featured_image_id
 ```
 
 | Field | Notes |
@@ -27,8 +29,9 @@ id  slug  title  summary  body  author  external_url  featured  published_at  co
 | `title`, `summary`, `body` | map as `string` in Framer; `body` HTML→rich-text fidelity is a Phase 3 item |
 | `author`, `external_url`, `featured`, `published_at` | |
 | `content_type_id` | opaque UUID in v1 (type-name resolution deferred) |
+| `featured_image_id` | file id of the card image; the `tag-sync` reconciler reads `/assets` and sets Framer's Image field (Framer re-hosts it), gated to scan-clean files |
 
-**Never exposed** (not in the field list): `editorial_notes`, `status`, `source`, `featured_image_id`, `user_created`, `user_updated`, `date_created`, `date_updated`, `privacy_reviewed_at/by`, `metadata`, `sort`, `search_tsv`, and all `submission`/moderation data. (`status`, `published_at`, and `slug` are used by the **filter** but are not readable — Directus evaluates filters server-side on fields the token cannot see.)
+**Never exposed** (not in the field list): `editorial_notes`, `status`, `source`, `user_created`, `user_updated`, `date_created`, `date_updated`, `privacy_reviewed_at/by`, `metadata`, `sort`, `search_tsv`, and all `submission`/moderation data. (`status`, `published_at`, and `slug` are used by the **filter** but are not readable — Directus evaluates filters server-side on fields the token cannot see.)
 
 **Row filter (server-side, exact):**
 ```
@@ -79,9 +82,9 @@ The static token lives only in the Framer plugin config (and a temporary local h
 - **Tags + removal reconciliation — implemented** (`gathering-matters-directus/tag-sync/`, Framer Server API). Two jobs in one command, run *alongside* the plugin:
   1. **Tags:** pushes active topic/audience/region tags into Framer `Topics`/`Audiences`/`Regions` collections + `topics`/`audiences`/`regions` **Multi Collection Reference** fields on `Directus` (the plugin can't sync the m2m).
   2. **Removal:** the plugin never deletes, so this removes Framer `Directus` content items no longer **Framer-eligible** (`status=published AND published_at NOT NULL AND published_at<=now AND slug NOT NULL` — so an **archived** item is removed) and stale `Content Types` that are inactive in Directus **and** unreferenced.
-  Safeguards: fail-closed Directus reads, UUID-only matching, referenced-type guard, mass-deletion guard (`MAX_DELETES`, `--force` override), dry-run, idempotent no-op; never touches plugin-owned fields, `FAQ`, or `How it works`. Requires read-only Directus perms on the Framer Sync policy for `content_item`, `content_type`, `tag`, `content_item_tag`. Applied + verified on production. See `tag-sync/README.md` for commands, env/secrets, safeguards, rotation, and the future Render-Cron plan.
-- **Images omitted in v1** — `featured_image_id` is not exposed; rendering would need a `directus_files` read grant + a Framer image-field mapping. `GET /assets/{id}` is currently 403.
+  Safeguards: fail-closed Directus reads, UUID-only matching, referenced-type guard, mass-deletion guard (`MAX_DELETES`, `--force` override), dry-run, idempotent no-op; never touches plugin-owned fields, `FAQ`, or `How it works`. Requires read-only Directus perms on the Framer Sync policy for `content_item`, `content_type`, `tag`, `content_item_tag`, plus `directus_files` (image-only) and `file_scan` for the featured-image sync. Applied + verified on production. See `tag-sync/README.md` for commands, env/secrets, safeguards, rotation, and the future Render-Cron plan.
+- **Featured images — implemented (2026-08).** `featured_image_id` is now in the allowlist; the `tag-sync` reconciler reads `/assets` (via an image-only `directus_files` read grant on the Framer Sync policy) and sets Framer's Image field, which Framer re-hosts. Only scan-clean (`NO_THREATS_FOUND`) files are pushed.
 - **Null-slug published items** are excluded by the `slug IS NOT NULL` filter (external-url-only items have no Framer page).
-- **No delete propagation** — unpublishing in Directus does not remove the Framer item; the operational runbook must include a manual "delete in Framer" step.
+- **Removal-on-unpublish — implemented (2026-08).** The Framer plugin never deletes, but the `tag-sync` removal reconciliation removes Framer items that are no longer Framer-eligible (e.g. archived or unpublished). No manual "delete in Framer" step is needed; see `tag-sync/README.md`.
 - **`body` rich-text fidelity** (HTML → Framer formatted text) to be confirmed in Phase 3.
 - **Reachability** — the Framer plugin cannot reach `http://localhost`; use the production HTTPS URL (or a temporary tunnel for local testing).

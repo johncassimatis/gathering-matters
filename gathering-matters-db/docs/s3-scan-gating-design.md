@@ -1,13 +1,16 @@
 # Directus S3 + GuardDuty scan-gating — design
 
-**Status:** implementation prepared on `feat/aws-s3-guardduty-storage`; no Directus,
-Render, Framer, AWS, migration, or production changes are authorized by this task. The
-AWS infrastructure is prepared in `infra/aws/` but remains undeployed.
+**Status (updated 2026-08): DEPLOYED AND LIVE.** This began as a pre-deployment design doc
+(originally: *"AWS infrastructure prepared in `infra/aws/` but undeployed"*). Since then the
+`gathering-matters-storage-security` stack was deployed, **GuardDuty Malware Protection is active and
+scanning the production media bucket**, migration **V009** is applied, and **scan gating is enabled in
+production** — verified: real `NO_THREATS_FOUND` results recorded in `file_scan`, the
+`gm-scan-consumer` draining the SQS queue, and folder-based access gating live. The design, decisions,
+and increment/verification records below are retained as the implementation history; any passage that
+describes the pre-deploy state or the "AWS Paid-plan upgrade" gate is historical.
 
-This document specifies how the application should behave once files live in the
-scanned S3 bucket, and — importantly — flags a foundational behavior that must be
-**verified on the live Paid-plan account before any gating code is written**, because it
-can change the whole architecture.
+This document specifies how the application behaves for files in the scanned S3 bucket, and flags the
+foundational upload-read behavior (§2) that shaped the architecture.
 
 ---
 
