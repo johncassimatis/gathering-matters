@@ -127,12 +127,10 @@ node framer/deploy/build-inlined.mjs
 node --env-file=gathering-matters-directus/tag-sync/.env framer/deploy/deploy.mjs
 ```
 
-## Blocker before it works in the browser — CORS (deployment, not code)
+## CORS (resolved)
 
-Verified 2026-07-26 against production: the deployed Directus `CORS_ORIGIN` is pinned
-to a single Framer **plugin CDN** origin
-(`https://6q0czurpubwh4jj7iqi2kemta.plugins.framercdn.com`), **not** the origin that
-serves these forms. A cross-origin POST from the published site is therefore
-CORS-blocked. **Fix (on Render, env only, not weakening):** set `CORS_ORIGIN` to a
-comma-separated allowlist = existing plugin origin **+** the form's published site
-origin **+** the Framer preview origin. Do **not** use `*`.
+Historically the deployed Directus `CORS_ORIGIN` was pinned to a single Framer **plugin CDN**
+origin, so a cross-origin POST from the published site was CORS-blocked. **This is resolved:**
+`CORS_ORIGIN` on Render now allowlists the form's published site origin alongside the plugin and
+preview origins (comma-separated, never `*`), and a live preflight echoes it. If the forms are
+later served from a new origin, extend the same allowlist.

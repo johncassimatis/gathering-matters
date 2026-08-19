@@ -5,6 +5,11 @@ media bucket, GuardDuty Malware Protection for S3 (independent feature), tag-bas
 clean-file access enforcement, a least-privilege Directus IAM application user, and
 malware plus cost alerting.
 
+> **STATUS (2026-08): DEPLOYED AND LIVE.** The stack is deployed and **GuardDuty Malware Protection
+> is active and scanning the production media bucket** (verified: real `NO_THREATS_FOUND` results in
+> `file_scan`; scan consumer and gating enabled). The "NOT DEPLOY-READY" note below reflects the
+> pre-deploy design state and is kept for history.
+
 > **⚠ NOT DEPLOY-READY.** Confirmed from Directus 12.0.2 source that `FilesService.uploadOne()`
 > reads the uploaded object during upload (`stat()`/`HeadObject` for every file; images also
 > `read()`/`GetObject`) **before** GuardDuty can tag it, so the `NoReadUnlessClean` deny would

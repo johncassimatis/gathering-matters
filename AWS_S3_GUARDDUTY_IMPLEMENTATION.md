@@ -15,6 +15,13 @@ server into `~/.claude.json`, which requires a **new session** to activate. Resu
 
 ---
 
+> **STATUS (2026-08): COMPLETE — the rest of this file is a historical implementation log.** The AWS
+> account was upgraded to the Paid plan, the `gathering-matters-storage-security` stack was deployed,
+> and **GuardDuty Malware Protection is active and scanning the production media bucket** (verified:
+> real `NO_THREATS_FOUND` results recorded in `file_scan`; scan consumer and gating enabled). The
+> "Free account plan" and resume-point notes below describe the pre-deploy state and are kept for
+> history.
+
 ## CURRENT STATUS / RESUME POINT (updated)
 
 **Root cause of the earlier failure is confirmed to be the AWS Free account plan, NOT a

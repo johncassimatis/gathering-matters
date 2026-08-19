@@ -11,6 +11,7 @@ Directus 12 runtime with six custom extensions, and the public Framer submission
 | `framer/` | Source of truth for the two public submission form components. | [`framer/README.md`](framer/README.md) |
 | `scripts/` | Repo-root wrappers (`npm run sync:framer-tags*`). | — |
 | `gathering-matters-db/docs/` | Framer integration architecture + Phase 0 spike results. | — |
+| `infra/aws/` | AWS storage-security stack (private S3 media bucket + GuardDuty malware scanning) and the Render/Directus deploy handoff. | [`infra/aws/README.md`](infra/aws/README.md) |
 
 **Current stack:** Neon PostgreSQL 18 (`neondb`, `uuidv7()` PKs) · Flyway Community 12.8.2-rc2175 ·
 Directus 12.0.2 · Node 20+.
@@ -252,6 +253,30 @@ timestamp — rename it to keep the ordinal prefix.
 
 ---
 
+## Production / deployment
+
+Production runs on **Render** and **AWS**; operational details live in `infra/aws/`.
+
+* **Directus runtime** — the Render web service **`gathering-matters-database`**, which
+  **auto-deploys from `main`** (root directory `gathering-matters-directus/`, so only changes there
+  trigger a redeploy). Currently on Render's free tier, which spins the service down when idle.
+* **Database** — the Neon PostgreSQL `production` branch. Apply migrations with
+  `flyway migrate -environment=production`, from `main` only, after merge.
+* **File storage + malware scanning** — a private S3 media bucket in `us-west-2` with **GuardDuty
+  Malware Protection** (CloudFormation stack `gathering-matters-storage-security`). GuardDuty scans
+  every object and posts results to the `gathering-matters-s3-scan-results` SQS queue; the
+  `gm-scan-consumer` hook records each verdict in `file_scan` and moves the file between the pending
+  and clean folders. **Deployed and live in production** (verified 2026-08). See
+  [`infra/aws/README.md`](infra/aws/README.md) for the stack and
+  [`infra/aws/DIRECTUS_RENDER_HANDOFF.md`](infra/aws/DIRECTUS_RENDER_HANDOFF.md) for the Render
+  environment and day-2 operations.
+* **Framer sync** — the Directus plugin pulls published content; tags and featured images are
+  reconciled by the manual `npm run sync:framer-tags` step (always `:dry-run` first). It is manual
+  only because the Render service is on the free plan; an always-on plan lets it move to a scheduled
+  job.
+
+---
+
 ## Rules
 
 * **Secrets stay out of Git.** `flyway.user.toml`, `.env`, `.env.test`, `tag-sync/.env`. Share real
@@ -277,12 +302,11 @@ at the point of use.
 
 | # | Issue | Impact |
 |---|---|---|
-| 1 | **Public form may not be placed on a live page.** The earlier CORS block is **fixed** — `CORS_ORIGIN` on Render now allowlists the Framer site origin and a live preflight echoes it (verified 2026-08-11). But a site redesign may have left no form on a routed public page. | Confirm a form is actually placed on a public page before trusting end-to-end submission. Browser CORS no longer blocks the POST. |
+| 1 | **No public form confirmed on a live page.** A site redesign may have left the submission form off the routed public pages. | Confirm a form is actually placed on a public page before trusting end-to-end submission. |
 | 2 | **V007 does not exist and never will.** `main` runs V001–V006, V008, V009 — the file-upload work merged as V009. | Treat V007 as permanently void. `outOfOrder` is not enabled, so a migration numbered V007 added later would be **refused** on every branch already at V008+. Never reuse the number. |
 | 3 | **No CI.** Nothing runs `flyway validate` or the API suite automatically. | Drift is caught only by review. |
-| 4 | **`framer/README.md` per-form consent table is stale.** Both forms now send `consent_to_contact` from the single required agreement checkbox, and the backend requires it for both sources (Phase 3). | Documentation only; the shipped code and tests agree with each other. |
 
-**Recently resolved (were gaps, now verified on prod 2026-08-11):** the CORS misconfiguration (see #1)
+**Recently resolved (were gaps, now verified on prod 2026-08-11):** the CORS misconfiguration
 and the unrecorded migration level — production is now at **V009** (`file_scan`, `submission_file`,
 `content_item_file` collections exist), so `gm-intake`'s V008 fields are present.
 
