@@ -1,0 +1,44 @@
+# Render Blueprint — automated Directus -> Framer tag/image sync.
+#
+# This defines ONLY the tag-sync cron job. The Directus web service
+# (gathering-matters-database) was created separately in the Render dashboard and is
+# intentionally NOT managed here, so connecting this Blueprint will not touch it.
+#
+# The cron runs the same command as `npm run sync:framer-tags`, on a schedule, as an
+# isolated service: a tag-sync failure never affects the Directus content pipeline.
+# It runs WITHOUT --force, so the mass-deletion guard still protects Framer; a large
+# reconciliation aborts safely and a human runs `node sync.mjs --apply --force` once.
+#
+# Before it works, set these secret env vars on the service in the Render dashboard
+# (they are deliberately NOT committed here):
+#   DIRECTUS_URL     e.g. https://cms.gatheringmatters.com
+#   DIRECTUS_TOKEN   the read-only Framer Sync static token
+#   FRAMER_PROJECT   the Framer project URL
+#   FRAMER_API_KEY   a PERMANENT Framer Server API key (not the temporary one)
+#
+# Schedule is every 10 minutes by default; the sync is idempotent (a no-op when
+# nothing changed), so frequent runs are cheap. Tune to taste (e.g. */5 or hourly).
+
+services:
+  - type: cron
+    name: gm-framer-tag-sync
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    schedule: "*/10 * * * *"
+    rootDir: gathering-matters-directus/tag-sync
+    buildCommand: npm ci
+    startCommand: node sync.mjs --apply
+    autoDeploy: true
+    envVars:
+      - key: DIRECTUS_URL
+        sync: false
+      - key: DIRECTUS_TOKEN
+        sync: false
+      - key: FRAMER_PROJECT
+        sync: false
+      - key: FRAMER_API_KEY
+        sync: false
+      - key: CONTENT_COLLECTION
+        value: Directus
